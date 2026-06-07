@@ -5,7 +5,7 @@
 
 > ### ⏯ RESUME MARKER — next session
 > **Done:** Vision ✅ · Scope ✅ · Plan ✅ · Architecture ✅ · Structure ✅ · Foundation ✅ (runs end-to-end;
-> local checks green; GitHub CI green pending first push).
+> **CI green, PR #1 merged to `main`**).
 > **Next phase:** **`/contracts`** — define the typed models/schemas + the **first Alembic migration**
 > (the `LedgerEntry` hash-chain table) and the port interfaces (Identity/Policy/Ledger/Upstream/LLM)
 > BEFORE business logic. Then `/build` M1.1.
@@ -283,14 +283,21 @@ async via `httpx` behind adapters; the rule is recorded so it isn't violated lat
 | `gatekeeper health` (valid key) | exit 0 + config table + JSON log |
 | `gatekeeper health` (no key) | exit 2, fail-closed |
 | `alembic upgrade head` | exit 0 |
-| `pip-audit` (local) | ⚠️ blocked by sandbox TLS cert interception — runs in CI |
-| GitHub Actions green | ⏳ pending first push |
+| `pip-audit` (local) | ⚠️ blocked by sandbox TLS — but **passes green in CI** |
+| GitHub Actions CI | ✅ **green** — both jobs pass (PR #1, merged to `main`) |
+
+### Proven on CI (not just locally)
+- The full `pip install -e .` **resolved the complete dependency graph** (cedarpy, mcp, fastapi, sqlalchemy…)
+  on a clean Ubuntu runner — the dep graph is sound.
+- The **dep-vuln gate fail-closed for real**: pip-audit caught `pip 26.1.1` (PYSEC-2026-196) and the build
+  went red until pip was upgraded — proof the gate works, not just that it's wired.
+- CI surfaced 4 issues local runs couldn't (pytest import-mode, missing ledger dir, gitleaks PR permission,
+  the pip CVE); all fixed before merge.
 
 ### Honest gaps
-- **CI green is wired but unproven on GitHub** until pushed (only a real Actions run proves it).
-- **pip-audit** couldn't run locally (sandbox TLS), and the first full `pip install -e .` in CI is the
-  first real resolution of the *complete* dependency graph (cedarpy/mcp wheels) — if a wheel is missing,
-  `/build` pins it. Local runs used the light skeleton subset (pydantic/typer/sqlalchemy/alembic).
+- `pip-audit` still can't run in this local sandbox (TLS cert interception) — but it runs green in CI, so
+  it's covered.
+- No governance business logic yet — that's `/contracts` → `/build` M1.1 (by design).
 
 ## Contracts
 _(unfilled — `/contracts`)_
