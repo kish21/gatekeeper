@@ -57,6 +57,7 @@ jobs:
           python-version: "3.12"
       - name: Dependency CVE scan (pip-audit) — blocks merge on a known CVE
         run: |
+          python -m pip install --upgrade pip   # keep pip current (it is itself audited)
           pip install pip-audit
           pip install -e .
           # --skip-editable skips our own local package (not on PyPI). pip-audit still exits non-zero
