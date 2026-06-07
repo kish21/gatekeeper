@@ -11,8 +11,8 @@ keywords = ["mcp", "model-context-protocol", "governance", "gateway", "rbac", "a
 # --- Runtime (prod) dependencies. Pins added in /foundation when first installed. ---
 dependencies = [
   "mcp",                 # official Model Context Protocol SDK (server + client)
-  "pydantic>=2",         # typed contracts / DTOs
-  "pydantic-settings>=2",# .env-driven settings (no hardcoding)
+  "pydantic>=2.13.4",         # typed contracts / DTOs
+  "pydantic-settings>=2.14.1",# .env-driven settings (no hardcoding)
   "pyyaml>=6",           # YAML config loader
   "typer>=0.12",         # operator CLI
   "rich>=13",            # CLI output
