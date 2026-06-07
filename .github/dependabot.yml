@@ -1,0 +1,27 @@
+# Automated dependency updates. Wired on day-one while deps are clean so the CVE gate never
+# inherits a backlog. Tightly-coupled packages are grouped so they bump in ONE PR (independent
+# bumps drift versions apart and break the build).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pydantic:
+        patterns: ["pydantic", "pydantic-settings"]
+      web-stack:
+        patterns: ["fastapi", "starlette", "uvicorn*"]
+      data-stack:
+        patterns: ["sqlalchemy", "alembic"]
+      dev-dependencies:
+        patterns: ["pytest*", "ruff", "mypy", "pre-commit", "pip-audit"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

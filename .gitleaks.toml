@@ -1,0 +1,19 @@
+# Secret-scan config for GateKeeperAI (pre-commit + CI).
+# Start from gitleaks' built-in ruleset, then allowlist ONLY documented dev fakes.
+title = "GateKeeperAI gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented non-secrets: env template + obviously-fake dev fixtures."
+paths = [
+  '''\.env\.example$''',
+  '''config/identities\.yaml$''',   # static dev token map — fake tokens only (see file header)
+  '''tests/.*''',                    # test fixtures use clearly-fake credentials
+]
+# Fake tokens used in dev/test config and docs. These are NOT real secrets.
+regexes = [
+  '''dev-token-[a-z]+-REPLACE-ME''',
+  '''example-hmac-key-do-not-use''',
+]

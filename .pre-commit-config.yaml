@@ -1,0 +1,36 @@
+# Pre-commit hooks: format, lint, hygiene, and secret-scan on every commit.
+# Install once with `make install` (runs `pre-commit install`).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff          # lint
+        args: [--fix]
+      - id: ruff-format   # format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks      # secret-scan, uses .gitleaks.toml
+
+  # Dependency-vulnerability scan. On pre-push (needs network) so commits stay fast;
+  # CI runs it too and blocks merge on a known CVE (fail-closed).
+  - repo: local
+    hooks:
+      - id: pip-audit
+        name: pip-audit (dependency CVE scan)
+        entry: pip-audit
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

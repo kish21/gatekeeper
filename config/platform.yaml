@@ -1,0 +1,32 @@
+# platform.yaml — ENGINE / technical knobs (change how the gateway runs).
+# Business/product knobs live in product.yaml. Secrets live in .env (never here).
+
+transport:
+  mode: stdio            # stdio | http
+  http_host: 127.0.0.1   # trust-local default (see ADR-006: bearer tokens, loopback only)
+  http_port: 8765
+
+# Which concrete adapter implements each port (ports & adapters / ADR-004).
+# Swap an implementation here without touching business logic.
+adapters:
+  identity: static_token   # static_token (M1) | oidc (deferred)
+  policy: cedar            # cedar
+  ledger: sqlite           # sqlite (M1) | postgres (deferred)
+  upstream: mcp_client     # mcp_client
+  llm: claude              # claude | openai | stub  (M2 only)
+
+ledger:
+  path: ./.gatekeeper/audit.db
+  hash_algo: hmac-sha256   # keyed HMAC; key = $GATEKEEPER_HMAC_KEY (ADR-003)
+
+policy:
+  dir: ./policies          # .cedar files (policy-as-code)
+
+# Per-external resilience (ADR-004). Times in seconds.
+resilience:
+  upstream: { timeout: 30, retries: 2, retry_on: transient, breaker_threshold: 5 }
+  llm:      { timeout: 8,  retries: 1, retry_on: transient }   # M2
+
+logging:
+  level: INFO
+  format: json             # structured logs for SIEM ingestion

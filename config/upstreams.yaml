@@ -1,0 +1,15 @@
+# upstreams.yaml — the registry that makes GateKeeperAI tool-agnostic.
+# Add ANY MCP server here to bring it under governance. ZERO code per server.
+# This is the file that proves the M1.4 exit criterion ("govern a 2nd server by config edit alone").
+
+upstreams:
+  - name: demo-files            # logical id used in policy + audit
+    transport: stdio
+    command: ["python", "-m", "examples.demo_file_server"]   # how to launch/reach the server
+    # Optional explicit write annotations (override write_detection name_patterns):
+    writes: ["write_file", "delete_file"]
+    reads:  ["read_file", "list_dir"]
+
+  # - name: github
+  #   transport: http
+  #   url: http://localhost:9000/mcp

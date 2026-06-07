@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: lint · migrate · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (prod deps + dev tools) — mirrors the prod bootstrap
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio ruff mypy types-PyYAML
+      - name: Lint + format + types
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy
+      - name: Migrate from the real schema (Alembic)
+        run: alembic upgrade head
+      - name: Test
+        run: pytest -q
+
+  security:
+    name: secret-scan · dep-vuln (fail-closed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks scans full history
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependency CVE scan (pip-audit) — blocks merge on a known CVE
+        run: |
+          pip install pip-audit
+          pip install -e .
+          pip-audit --strict
+
+  container:
+    name: build + run in container (prod parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t gatekeeper:ci .
+      - name: Smoke-run the health path (throwaway creds at runtime, none in repo)
+        run: |
+          docker run --rm -e GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper:ci health

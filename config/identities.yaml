@@ -1,0 +1,17 @@
+# identities.yaml — static token -> principal -> role map (M1 IdentityResolver stub).
+# DEV/DEMO ONLY. Tokens here are intentionally FAKE placeholders (allowlisted in .gitleaks.toml).
+# In a real deployment this adapter is swapped for OIDC (config/platform.yaml adapters.identity=oidc),
+# and bearer tokens are upgraded to sender-constrained tokens — see PRODUCT.md ADR-006.
+
+principals:
+  - token: dev-token-alice-REPLACE-ME
+    principal: alice
+    role: operator        # may read + request writes (writes need approval in M2)
+
+  - token: dev-token-bob-REPLACE-ME
+    principal: bob
+    role: readonly        # may read only; writes denied by policy
+
+  - token: dev-token-root-REPLACE-ME
+    principal: root
+    role: admin           # may read + write (still audited; still approval-gated in M2)
