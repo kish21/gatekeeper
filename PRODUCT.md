@@ -265,10 +265,10 @@ LedgerEntry table) is created in `/contracts`.
 - **CI** (`.github/workflows/ci.yml`), blocks merge on red, 2 jobs:
   `quality` (install prod deps → ruff + format + **mypy** → `alembic upgrade head` → pytest →
   **build wheel + clean-install + `gatekeeper health` smoke** with a runtime-generated key = prod-bootstrap parity) ·
-  `security` (**gitleaks** + **pip-audit --strict**, fail-closed on a CVE).
-  *(The Dockerfile is retained for reproducible self-hosting but is NOT a CI gate — for a pip-distributed
-  tool the prod artifact is the wheel, and gating on a Docker Hub pull proved flaky. Infra/deploy stays
-  deferred per Scope.)*
+  `security` (**gitleaks** + **pip-audit**, fail-closed on a CVE).
+  *(No container yet — for a pip-distributed tool the prod artifact is the wheel. A proven, CI-built
+  Dockerfile will land when the deferred "real deployment" trigger fires, per Scope; we don't carry an
+  untested one in the meantime.)*
 
 **Async / event loop:** N/A for M1 (no model download / blocking first-use). M2 LLM + upstream I/O are
 async via `httpx` behind adapters; the rule is recorded so it isn't violated later.

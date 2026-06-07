@@ -14,5 +14,4 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   ledger HMAC key); structured JSON logging + tracing/error-reporter port; Alembic migration env
   (DB URL derived from config); 9 unit tests (config-flow + guard + Windows-console regression).
 - **Auto-layer:** ruff (lint+format) + mypy, pip-audit dep-vuln scan, Dependabot (grouped),
-  and a 3-job CI workflow (quality · security · container) that blocks merge on red.
-- `Dockerfile` + `.dockerignore` for reproducible runs (non-root; HMAC key injected at runtime).
+  and a 2-job CI workflow (quality · security) that blocks merge on red.
