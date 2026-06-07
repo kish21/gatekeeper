@@ -59,4 +59,5 @@ jobs:
         run: |
           pip install pip-audit
           pip install -e .
-          pip-audit --strict
+          # --skip-editable: don't audit our own local package (not on PyPI); --strict still fails on real CVEs.
+          pip-audit --strict --skip-editable
