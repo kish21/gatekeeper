@@ -262,10 +262,13 @@ LedgerEntry table) is created in `/contracts`.
   **gitleaks** (secret-scan), **pip-audit** (dep-vuln, `pre-push` stage).
 - **Dependabot** wired day-one (`pip` + `github-actions`, weekly), tightly-coupled packages **grouped**
   (pydantic, web-stack, data-stack, dev) so they bump in one PR.
-- **CI** (`.github/workflows/ci.yml`), blocks merge on red, 3 jobs:
-  `quality` (install prod deps → ruff + format + **mypy** → `alembic upgrade head` → pytest) ·
-  `security` (**gitleaks** + **pip-audit --strict**, fail-closed on a CVE) ·
-  `container` (build Dockerfile → run `gatekeeper health` with a **runtime-generated** HMAC key — no secret in repo).
+- **CI** (`.github/workflows/ci.yml`), blocks merge on red, 2 jobs:
+  `quality` (install prod deps → ruff + format + **mypy** → `alembic upgrade head` → pytest →
+  **build wheel + clean-install + `gatekeeper health` smoke** with a runtime-generated key = prod-bootstrap parity) ·
+  `security` (**gitleaks** + **pip-audit --strict**, fail-closed on a CVE).
+  *(The Dockerfile is retained for reproducible self-hosting but is NOT a CI gate — for a pip-distributed
+  tool the prod artifact is the wheel, and gating on a Docker Hub pull proved flaky. Infra/deploy stays
+  deferred per Scope.)*
 
 **Async / event loop:** N/A for M1 (no model download / blocking first-use). M2 LLM + upstream I/O are
 async via `httpx` behind adapters; the rule is recorded so it isn't violated later.

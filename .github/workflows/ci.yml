@@ -32,6 +32,12 @@ jobs:
         run: alembic upgrade head
       - name: Test
         run: pytest -q
+      - name: Build + smoke-run the wheel (prod-bootstrap parity)
+        run: |
+          pip install build
+          python -m build --wheel
+          pip install dist/*.whl --force-reinstall
+          GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper health
 
   security:
     name: secret-scan · dep-vuln (fail-closed)
@@ -44,6 +50,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITLEAKS_CONFIG: .gitleaks.toml
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # required by the action to scan PRs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -52,14 +59,3 @@ jobs:
           pip install pip-audit
           pip install -e .
           pip-audit --strict
-
-  container:
-    name: build + run in container (prod parity)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t gatekeeper:ci .
-      - name: Smoke-run the health path (throwaway creds at runtime, none in repo)
-        run: |
-          docker run --rm -e GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper:ci health

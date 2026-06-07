@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from gatekeeper.cli.app import app
 from gatekeeper.config.loader import ConfigError, Settings, load_config, validate_security
+from gatekeeper.db.base import database_url, ensure_parent_dir
 
 runner = CliRunner()
 
@@ -56,3 +57,12 @@ def test_health_output_is_legacy_windows_console_safe(monkeypatch):
     result = runner.invoke(app, ["health"])
     assert result.exit_code == 0
     result.output.encode("cp1252")  # must not raise UnicodeEncodeError
+
+
+def test_ensure_parent_dir_creates_missing_dir(tmp_path):
+    # Regression: alembic/SQLite failed in CI because the ledger dir did not exist.
+    target = tmp_path / "nested" / "deep" / "audit.db"
+    assert not target.parent.exists()
+    ensure_parent_dir(str(target))
+    assert target.parent.is_dir()
+    assert database_url(str(target)).startswith("sqlite:///")
