@@ -6,9 +6,6 @@ import pytest
 
 from gatekeeper.config import loader
 
-# A valid-looking HMAC key for tests (64 hex chars). NOT a real secret — fixture only.
-GOOD_HMAC = "a" * 64
-
 
 @pytest.fixture(autouse=True)
 def _clear_settings_cache():

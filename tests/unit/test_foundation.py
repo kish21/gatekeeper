@@ -6,7 +6,6 @@ These also give CI a real green suite from day one.
 from __future__ import annotations
 
 import pytest
-from tests.conftest import GOOD_HMAC
 from typer.testing import CliRunner
 
 from gatekeeper.cli.app import app
@@ -14,6 +13,9 @@ from gatekeeper.config.loader import ConfigError, Settings, load_config, validat
 from gatekeeper.db.base import database_url, ensure_parent_dir
 
 runner = CliRunner()
+
+# A valid-looking HMAC key for tests (64 hex chars). NOT a real secret — fixture only.
+GOOD_HMAC = "a" * 64
 
 
 # --- config actually flows (no dead config) --------------------------------
