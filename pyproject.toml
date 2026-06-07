@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # M2 AI layer — install only when building risk-scoring. Keeps M1 lean.
-ai = ["anthropic>=0.40"]
+ai = ["anthropic>=0.107.0"]
 
 [dependency-groups]
 # Dev/test tooling — NOT shipped to prod.
