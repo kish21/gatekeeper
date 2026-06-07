@@ -19,8 +19,8 @@ dependencies = [
   "fastapi>=0.115",      # HTTP MCP transport + (M2) approval API
   "uvicorn[standard]>=0.30",
   "httpx>=0.27",         # async HTTP for upstream/LLM
-  "sqlalchemy>=2",       # ledger persistence
-  "alembic>=1.13",       # DB migrations (never hand-edit schema)
+  "sqlalchemy>=2.0.50",       # ledger persistence
+  "alembic>=1.18.4",       # DB migrations (never hand-edit schema)
   "cedarpy",             # Cedar policy engine (policy-as-code, analyzable)
 ]
 
