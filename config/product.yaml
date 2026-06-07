@@ -1,0 +1,23 @@
+# product.yaml — PRODUCT / business knobs (change behavior without code).
+# Engine/technical knobs live in platform.yaml. Secrets live in .env.
+
+governance:
+  default_decision: deny       # fail-closed: unknown (role,tool) is denied (ADR-003)
+
+# How a call is judged a "write" (M2 approval target). Config-driven, not hardcoded.
+write_detection:
+  # Tools whose name matches these are treated as writes/mutations.
+  name_patterns: ["create*", "update*", "delete*", "write*", "put*", "exec*", "run*", "send*"]
+  # Or annotated explicitly per upstream in upstreams.yaml (annotation wins).
+
+# M2 — LLM risk-scoring + human approval.
+risk:
+  enabled: false               # M2 toggle; M1 ships with this off
+  model: claude-haiku-4-5      # cheap/fast classifier (provider chosen in platform.yaml)
+  prompt: risk_classifier      # -> src/gatekeeper/prompts/risk_classifier.yaml (versioned)
+  approve_threshold: 0.5       # >= this risk score routes a write to human approval
+  on_classifier_error: require_approval   # fail-closed (ADR-005)
+
+approval:
+  mode: cli                    # cli (M1/M2) | web (deferred)
+  timeout: 600                 # seconds a pending write waits before auto-deny (fail-closed)
