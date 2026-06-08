@@ -41,6 +41,10 @@ htmlcov/
 coverage.xml
 .tox/
 
+# ---- Personal local notes (never committed) ------------------------------
+/.notes/
+*.local.md
+
 # ---- IDE / OS ------------------------------------------------------------
 .idea/
 .vscode/
