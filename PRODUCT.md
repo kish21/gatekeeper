@@ -4,12 +4,13 @@
 > **AI product? YES** (uses an LLM to risk-score/classify tool calls → the AI-security layer applies downstream.)
 
 > ### ⏯ RESUME MARKER — next session
-> **Done:** Vision ✅ · Scope ✅ · Plan ✅ · Architecture ✅ · Structure ✅ · Foundation ✅ · Contracts ✅
-> (typed models + 5 port interfaces + migration `0001_create_ledger`; schema==code via `alembic check`).
-> **Next phase:** **`/build` — M1.1** (the first feature): a transparent pass-through MCP proxy that
-> forwards a call to a real upstream and appends a `LedgerEntry` (the hash-chain `append`/`verify` in
-> `adapters/ledger/`). Build ONE feature, security in the definition-of-done.
-> **Dev setup:** `.venv` has full deps (`pip install -e ".[ai]"`). Run: `GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32) gatekeeper health`.
+> **Done:** Vision…Contracts ✅ · **Build #1 ✅ — tamper-evident ledger** (HMAC hash-chain `LedgerStore` +
+> `verify`/`tail` CLI; live-verified, 29 tests, security+code reviewed). See `#Build log`.
+> **Next phase:** **`/build` — the MCP proxy** (next feature): a transparent pass-through that forwards a
+> tool call to a real upstream MCP server and **appends a `LedgerEntry`** via the store just built —
+> wiring identity→(policy later)→audit→forward. Then identity+RBAC (M1.2).
+> **Dev setup:** `.venv` has full deps. Demo the wedge: `GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)` then
+> `make migrate` → append (see docs/features/ledger.md) → `gatekeeper verify`.
 > **How to resume:** fresh session → run **`/playbook`** or **`/build`** directly.
 
 ---
@@ -348,7 +349,19 @@ contract (unknown token → raise; policy/ledger error → deny; classifier erro
 `alembic upgrade head` applies · `alembic check` = no drift · schema==code asserted in an integration test.
 
 ## Build log
-_(unfilled — `/build`)_
+
+> **Sequencing note:** within M1, the **ledger (wedge)** was built before the proxy — a deliberate
+> resequence of the plan's M1.1 slice. Rationale: the ledger is self-contained, fully demonstrable on
+> its own (`gatekeeper verify`), and de-risks the hardest/highest-value part. The MCP proxy that feeds it
+> is the next `/build`. Still within M1 scope.
+
+| Feature | DoD incl. security met? | How verified (evidence) | Doc |
+|---|---|---|---|
+| **Tamper-evident audit ledger** (keyed-HMAC hash-chain `LedgerStore`: append/read/get/verify + `verify`/`tail` CLI) | ✅ append-only · fail-closed HMAC key · detects edit/delete/reorder/insert/wrong-key · PII-safe (hash+redacted) · tenant filter · no secret in code | **Live:** migrate→append 3→`verify` OK+head (exit 0)→raw-SQL tamper→`verify` TAMPERED@seq=2 (exit 1). **Tests:** 29 (9 new) incl. tamper/delete/wrong-key. **/security-review:** no findings ≥8. **/code-review:** cleanups applied. ruff+mypy clean; `alembic check` no drift. | [docs/features/ledger.md](docs/features/ledger.md) |
+
+**Known limitations (recorded, not silent):** tail-truncation undetectable by a bare chain (mitigation:
+`verify` emits head hash to pin out-of-band; full anchoring deferred) · `get()` not tenant-scoped (safe
+today: UUID call_ids + single tenant) · single-writer append assumption.
 
 ## Dev-complete
 _(unfilled — `/dev-check`)_

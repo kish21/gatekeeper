@@ -9,7 +9,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from gatekeeper.config.loader import get_settings, load_config
+from gatekeeper.config.loader import get_settings, ledger_path, load_config
 from gatekeeper.db import models  # noqa: F401 — register ORM models on Base.metadata
 from gatekeeper.db.base import Base, database_url, ensure_parent_dir
 
@@ -22,10 +22,9 @@ def _resolve_url() -> str:
     override = config.get_main_option("sqlalchemy.url")
     if override:
         return override
-    cfg = load_config(get_settings())
-    ledger_path = cfg["platform"].get("ledger", {}).get("path", "./.gatekeeper/audit.db")
-    ensure_parent_dir(ledger_path)  # SQLite can't create a DB in a missing dir
-    return database_url(ledger_path)
+    path = ledger_path(load_config(get_settings()))
+    ensure_parent_dir(path)  # SQLite can't create a DB in a missing dir
+    return database_url(path)
 
 
 def run_migrations_offline() -> None:

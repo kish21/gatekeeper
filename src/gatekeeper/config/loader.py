@@ -48,6 +48,14 @@ _WEAK_HMAC_KEYS = frozenset(
 #: Minimum HMAC key length in chars (>= 32). Generate with `openssl rand -hex 32`.
 _MIN_HMAC_LEN = 32
 
+#: Default ledger DB path when not set in platform.yaml.
+DEFAULT_LEDGER_PATH = "./.gatekeeper/audit.db"
+
+
+def ledger_path(config: dict[str, Any]) -> str:
+    """The configured ledger DB path (platform.yaml -> ledger.path), or the default. One source."""
+    return str(config["platform"].get("ledger", {}).get("path", DEFAULT_LEDGER_PATH))
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file into a dict. Missing file -> empty (caller applies defaults)."""

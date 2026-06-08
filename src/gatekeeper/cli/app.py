@@ -10,12 +10,17 @@ gatekeeper seed-demo # write example config for a local demo           [/build]
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import typer
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from gatekeeper.config.loader import ConfigError, boot, get_settings
+from gatekeeper.adapters.ledger.factory import open_ledger
+from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.config.loader import ConfigError, boot, get_settings, ledger_path
 from gatekeeper.infra.logging import configure_logging, get_logger
 
 app = typer.Typer(
@@ -23,6 +28,20 @@ app = typer.Typer(
 )
 _console = Console()
 _TODO = "Implemented in /build."
+
+
+@contextmanager
+def _opened_ledger() -> Iterator[SqliteLedgerStore]:
+    """Open the ledger, map a misconfig to exit 2, and always close it (shared by commands)."""
+    try:
+        store = open_ledger()
+    except ConfigError as exc:
+        _console.print(f"[bold red][ERROR] {exc}[/]")
+        raise typer.Exit(code=2) from exc
+    try:
+        yield store
+    finally:
+        store.close()
 
 
 @app.command()
@@ -46,7 +65,7 @@ def health() -> None:
     table.add_row("env (.env)", settings.env)
     table.add_row("log level (.env)", settings.log_level)
     table.add_row("HMAC key", "set (validated, fail-closed)")
-    table.add_row("ledger path (platform.yaml)", str(platform.get("ledger", {}).get("path", "?")))
+    table.add_row("ledger path (platform.yaml)", ledger_path(config))
     table.add_row(
         "hash algo (platform.yaml)", str(platform.get("ledger", {}).get("hash_algo", "?"))
     )
@@ -72,15 +91,43 @@ def serve() -> None:
 
 
 @app.command()
-def tail(limit: int = 20) -> None:
-    """Tail the audit ledger."""
-    raise NotImplementedError(_TODO)
+def tail(limit: int = 20, principal: str | None = None) -> None:
+    """Tail the audit ledger (most recent shown last)."""
+    configure_logging(get_settings().log_level)
+    with _opened_ledger() as store:
+        entries = store.read(limit=limit, principal=principal)
+    if not entries:
+        _console.print("(ledger is empty)")
+        return
+    table = Table(title="audit ledger (recent)", box=box.ASCII)
+    for col in ("seq", "ts", "principal", "tool", "verdict"):
+        table.add_column(col)
+    for e in reversed(entries):  # oldest -> newest
+        table.add_row(str(e.seq), e.ts, e.principal, f"{e.upstream}:{e.tool}", str(e.verdict))
+    _console.print(table)
 
 
 @app.command()
 def verify() -> None:
-    """Verify audit-ledger integrity (walk the hash-chain)."""
-    raise NotImplementedError(_TODO)
+    """Verify audit-ledger integrity. Exit 0=intact, 1=tampered, 2=misconfig."""
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.verify")
+    with _opened_ledger() as store:
+        result = store.verify()
+        head = store.read(limit=1)
+    if result.ok:
+        head_hash = head[0].entry_hash if head else "(empty)"
+        _console.print(f"[bold green]OK[/] ledger intact - {result.checked} entries verified")
+        # Emit the head hash so it can be pinned out-of-band (detects tail-truncation).
+        _console.print(f"head: {head_hash}")
+        log.info("verify ok", extra={"checked": result.checked, "head": head_hash})
+        return
+    _console.print(
+        f"[bold red]TAMPERED[/] broken at seq={result.broken_at}: {result.detail} "
+        f"(verified {result.checked} before the break)"
+    )
+    log.error("verify failed", extra={"broken_at": result.broken_at, "detail": result.detail})
+    raise typer.Exit(code=1)
 
 
 @app.command()
