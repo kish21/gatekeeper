@@ -19,3 +19,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   `RiskAssessment`, `LedgerEntry`, `VerifyResult`); five typed port interfaces (Identity, Policy,
   Ledger, Upstream, LLM); and the first DB migration `0001_create_ledger` (append-only, hash-chained
   audit table). Schema↔code proven via `alembic check` (no drift) + an integration test.
+- **Tamper-evident audit ledger (first feature):** keyed-HMAC hash-chained `SqliteLedgerStore`
+  (`append`/`read`/`get`/`verify`) and `gatekeeper verify` / `tail` CLI. `verify` detects any edit,
+  deletion, reorder, insert, or wrong key and pinpoints the broken entry; it also emits the head hash
+  for out-of-band pinning. Append-only + fail-closed on the HMAC key; raw args/output never stored.

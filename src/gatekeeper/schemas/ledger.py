@@ -41,8 +41,12 @@ class LedgerEntry(BaseModel):
     payload_hash: str = Field(description="HMAC-SHA256 hex of canonical arguments (PII-safe).")
     result_summary: str = Field(default="", description="Redacted/truncated; never raw output.")
     risk: float | None = Field(default=None, ge=0.0, le=1.0, description="0.0..1.0 (M2).")
-    prev_hash: str = Field(description="Predecessor's entry_hash (or GENESIS_HASH).")
-    entry_hash: str = Field(description="Keyed HMAC of this entry; unique across the chain.")
+    prev_hash: str | None = Field(
+        default=None, description="Predecessor's entry_hash; set by the store on append."
+    )
+    entry_hash: str | None = Field(
+        default=None, description="Keyed HMAC of this entry; set by the store on append."
+    )
     schema_version: int = LEDGER_SCHEMA_VERSION
 
 
