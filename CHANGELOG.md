@@ -15,3 +15,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   (DB URL derived from config); 9 unit tests (config-flow + guard + Windows-console regression).
 - **Auto-layer:** ruff (lint+format) + mypy, pip-audit dep-vuln scan, Dependabot (grouped),
   and a 2-job CI workflow (quality · security) that blocks merge on red.
+- **Contracts:** typed domain models (`Principal`, `ToolCall`, `ToolResult`, `Decision`,
+  `RiskAssessment`, `LedgerEntry`, `VerifyResult`); five typed port interfaces (Identity, Policy,
+  Ledger, Upstream, LLM); and the first DB migration `0001_create_ledger` (append-only, hash-chained
+  audit table). Schema↔code proven via `alembic check` (no drift) + an integration test.
