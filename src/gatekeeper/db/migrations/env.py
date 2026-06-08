@@ -10,6 +10,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from gatekeeper.config.loader import get_settings, load_config
+from gatekeeper.db import models  # noqa: F401 — register ORM models on Base.metadata
 from gatekeeper.db.base import Base, database_url, ensure_parent_dir
 
 config = context.config
@@ -17,6 +18,10 @@ target_metadata = Base.metadata
 
 
 def _resolve_url() -> str:
+    # An explicit url (set by tests/CI via Config) wins; otherwise derive from gateway config.
+    override = config.get_main_option("sqlalchemy.url")
+    if override:
+        return override
     cfg = load_config(get_settings())
     ledger_path = cfg["platform"].get("ledger", {}).get("path", "./.gatekeeper/audit.db")
     ensure_parent_dir(ledger_path)  # SQLite can't create a DB in a missing dir

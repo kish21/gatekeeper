@@ -4,14 +4,13 @@
 > **AI product? YES** (uses an LLM to risk-score/classify tool calls → the AI-security layer applies downstream.)
 
 > ### ⏯ RESUME MARKER — next session
-> **Done:** Vision ✅ · Scope ✅ · Plan ✅ · Architecture ✅ · Structure ✅ · Foundation ✅ (runs end-to-end;
-> **CI green, PR #1 merged to `main`**).
-> **Next phase:** **`/contracts`** — define the typed models/schemas + the **first Alembic migration**
-> (the `LedgerEntry` hash-chain table) and the port interfaces (Identity/Policy/Ledger/Upstream/LLM)
-> BEFORE business logic. Then `/build` M1.1.
-> **Dev setup:** `.venv` exists (light skeleton deps). For full deps: `pip install -e ".[ai]"` + dev group.
-> Run the skeleton: `GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32) gatekeeper health` (or `make serve` later).
-> **How to resume:** fresh session → run **`/playbook`** or **`/contracts`** directly.
+> **Done:** Vision ✅ · Scope ✅ · Plan ✅ · Architecture ✅ · Structure ✅ · Foundation ✅ · Contracts ✅
+> (typed models + 5 port interfaces + migration `0001_create_ledger`; schema==code via `alembic check`).
+> **Next phase:** **`/build` — M1.1** (the first feature): a transparent pass-through MCP proxy that
+> forwards a call to a real upstream and appends a `LedgerEntry` (the hash-chain `append`/`verify` in
+> `adapters/ledger/`). Build ONE feature, security in the definition-of-done.
+> **Dev setup:** `.venv` has full deps (`pip install -e ".[ai]"`). Run: `GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32) gatekeeper health`.
+> **How to resume:** fresh session → run **`/playbook`** or **`/build`** directly.
 
 ---
 
@@ -300,7 +299,53 @@ async via `httpx` behind adapters; the rule is recorded so it isn't violated lat
 - No governance business logic yet — that's `/contracts` → `/build` M1.1 (by design).
 
 ## Contracts
-_(unfilled — `/contracts`)_
+
+All boundaries are typed (no raw dicts/text cross a seam), the persisted schema is built by a migration
+and **proven to match the code**, and every unit/scale is pinned on both sides.
+
+### Typed domain models (`src/gatekeeper/schemas/`)
+| Model | Boundary | Notes |
+|---|---|---|
+| `Principal` | IdentityResolver → gateway | `id`, `role`, `tenant` (frozen/immutable after resolution) |
+| `ToolCall` | transport → gateway | `call_id` (UUID4, idempotency key), `upstream`, `tool`, `arguments`, `action_kind` |
+| `ToolResult` | upstream → gateway | `ok`, redacted `summary` (never raw output) |
+| `Decision` | policy → gateway | `verdict` (allow/deny), `reason`, `risk` 0..1 \| None |
+| `RiskAssessment` | LLM (M2) → gateway | `risk` 0..1, `is_write`, `reason` |
+| `LedgerEntry` / `VerifyResult` | gateway ↔ ledger | the audit record + `verify` output |
+| Enums | everywhere | `Verdict{allow,deny}`, `ActionKind{read,write,unknown}` (string-valued) |
+
+### Port contracts (`src/gatekeeper/ports/`, typed `Protocol`s)
+`IdentityResolver.resolve` · `PolicyEngine.evaluate` · `LedgerStore.{append,read,get,verify}` ·
+`UpstreamClient.forward` (async) · `LLMProvider.classify` (async, M2). Each documents its **fail-closed**
+contract (unknown token → raise; policy/ledger error → deny; classifier error → require approval).
+
+### Persistence + migration (the wedge table)
+- ORM `db.models.LedgerEntryRow` ↔ DTO `schemas.LedgerEntry`, **field-for-field**.
+- **Migration `0001_create_ledger`** creates `ledger_entry` (append-only audit log) with
+  `entry_hash` **UNIQUE** + indexes on `call_id`, `ts`, `tenant`, and `(principal, ts)`.
+- **Schema↔code proven:** `alembic check` → *"No new upgrade operations detected"* (zero drift), and an
+  integration test runs the real migration into a temp DB and asserts DB columns == ORM columns.
+- Chain (implemented in /build): `entry_hash = HMAC-SHA256(key, prev_hash + canonical_json(entry-without-hashes))`, `prev_hash` of entry #1 = `GENESIS_HASH` (64 zeros).
+
+### Boundary units / scale (agreed both sides)
+| Field | Unit / scale | Pinned where |
+|---|---|---|
+| `risk` | float **[0.0, 1.0]** (0=safe, 1=dangerous) | model `ge/le` + test asserts `config product.yaml approve_threshold ∈ [0,1]` |
+| `ts` | **UTC** ISO-8601 string | `LedgerEntry.ts` doc |
+| `payload_hash`/`entry_hash`/`prev_hash` | lowercase hex, **64 chars** (HMAC-SHA256) | `HASH_HEX_LEN`, `GENESIS_HASH` |
+| `verdict`, `action_kind` | closed enums | `schemas.enums` |
+
+### Versioning · idempotency · tenancy · PII
+- **Versioning:** every row carries `schema_version` (=1); models are additive-only going forward; ports evolve additively.
+- **Idempotency / natural key:** `call_id` (UUID4 minted at ingress) identifies one intercepted call.
+- **Tenancy (isolation seam):** every persisted entity carries `tenant` (default `"default"`; multi-tenant deferred).
+- **PII / sensitive data:** raw `arguments` and raw upstream output are **NEVER persisted** — only a
+  keyed `payload_hash` + a redacted `result_summary`. Full-capture is a deferred, config-gated option
+  for non-sensitive upstreams only. (`identities.yaml` tokens are dev-only fakes, gitleaks-allowlisted.)
+
+### Evidence (this phase)
+`ruff`/`mypy` clean (38 files) · **20 tests pass** (10 new: model+boundary+migration) ·
+`alembic upgrade head` applies · `alembic check` = no drift · schema==code asserted in an integration test.
 
 ## Build log
 _(unfilled — `/build`)_
