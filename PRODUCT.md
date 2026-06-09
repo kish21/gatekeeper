@@ -385,7 +385,10 @@ _(unfilled — `/test`)_
 _(unfilled — `/eval`)_
 
 ## Ship log
-_(unfilled — `/ship`)_
+
+| Date | Shipped | Review + security | Docs reconciled? | CHANGELOG | Rollback / flag | PR |
+|---|---|---|---|---|---|---|
+| 2026-06-09 | **M1.3 — tamper-evidence gate + `gatekeeper show <call_id>`** (verify confirmed to pinpoint forgery on a ledger of RBAC verdicts; operator inspection of one recorded decision) | `/code-review` (high) no findings; `/security-review` no **new** vuln ≥8 (tenant-scoping = pre-existing documented limitation). Fresh-eyes live-path trace via the real binary. | ✅ `docs/features/tamper-evidence.md`, PRODUCT (#Build log + marker), README, CHANGELOG — match code | `[Unreleased]` (+ caught up missing M1.1/M1.2) | **Additive** (a stubbed command now works); no migration. Rollback = **revert PR #19**. Signal: CI green + `show` returns a decision on a real ledger. | [#19](https://github.com/kish21/gatekeeper/pull/19) |
 
 ## Learnings
 _(unfilled — `/learn`)_
