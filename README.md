@@ -60,8 +60,9 @@ MCP server). It sees the upstream's tools, and **every call is authenticated, de
 before being forwarded**. Then, in any shell:
 
 ```bash
-make tail           # view the audit trail
-make verify         # prove the ledger is intact (exit 0 = untampered)
+make tail                          # view the audit trail
+make verify                        # prove the ledger is intact (exit 0 = untampered)
+gatekeeper show <call_id>          # inspect the recorded decision for one call
 ```
 
 > **Not an external service:** `serve` runs entirely local (gateway → a local demo server). No network
@@ -75,7 +76,7 @@ Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan,
 
 | Milestone | Scope | State |
 |---|---|---|
-| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | building — **M1.1 ✅** transparent proxy + audit feed · **M1.2** RBAC next · M1.3/M1.4 pending |
+| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | building — **M1.1 ✅** transparent proxy · **M1.2 ✅** identity + RBAC (Cedar) · **M1.3 ✅** tamper-evidence + `verify`/`show` · M1.4 (config-driven any-server + `seed-demo`) next |
 | **M2** | LLM risk-scoring + human write-approval | planned |
 
 ## License

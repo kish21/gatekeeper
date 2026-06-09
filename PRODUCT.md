@@ -5,20 +5,21 @@
 
 > ### ⏯ RESUME MARKER — next session
 > **Done:** Vision…Contracts ✅ · **Build #1 ✅ — tamper-evident ledger** · **Build #2 ✅ — transparent
-> governed MCP proxy (M1.1)** · **Build #3 ✅ — Identity + RBAC policy-as-code / Cedar (M1.2)**
-> (`CedarPolicyEngine` PDP at pipeline step 3: role×action×tool → allow/deny+reason, fail-closed, both
-> verdicts recorded; live-verified E2E — readonly write denied+not-forwarded, 77 tests, code+security
-> reviewed). See `#Build log` + [docs/features/rbac.md](docs/features/rbac.md).
-> **Next phase:** **`/build` — M1.3 Tamper-evidence + `verify`.** Mostly already built in Build #1 (the
-> ledger is HMAC-hash-chained and `gatekeeper verify` passes on intact / pinpoints the broken seq on
-> tamper). M1.3 is the **gate that confirms it against the now-RBAC pipeline** + closes any loose ends
-> (e.g. the `gatekeeper show <call_id>` CLI is still `NotImplementedError`; `seed-demo` too). Verify the
-> exit criterion end-to-end and document, OR if M1.3 is judged complete, advance to **M1.4** (config-driven
-> 2nd server + operator CLI) — confirm scope with `/build` / `/playbook` at kickoff.
+> governed MCP proxy (M1.1)** · **Build #3 ✅ — Identity + RBAC policy-as-code / Cedar (M1.2)** ·
+> **Build #4 ✅ — Tamper-evidence gate + `show` (M1.3)** (gate confirmed `verify` pinpoints tamper on a
+> ledger of RBAC allow+deny verdicts; `gatekeeper show <call_id>` implemented — operator inspection of one
+> recorded decision; live-verified E2E incl. forge-detection; 82 tests, code+security reviewed). See
+> `#Build log` + [docs/features/tamper-evidence.md](docs/features/tamper-evidence.md).
+> **Next phase:** **`/build` — M1.4 Config-driven any-server + operator CLI** (the M1 exit slice). Exit
+> criterion: a **second, different** MCP server is brought under governance by **editing config only (zero
+> code)**. The one remaining CLI stub is **`gatekeeper seed-demo`** (still `NotImplementedError`) — fold it
+> in as the "make a fresh demo runnable from config" helper. Then run the **M1 exit gate** (`/dev-check`):
+> all slices on the live path + `/security-review` of the decision/ledger path clean + a fresh user governs
+> an arbitrary server from config+docs alone. Confirm scope with `/build` / `/playbook` at kickoff.
 > **Dev setup:** `.venv` has full deps. Demo: `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`,
 > `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`, `make migrate`, `gatekeeper serve` (drive with
-> an MCP client → demo_file_server), then `gatekeeper tail` / `gatekeeper verify`. RBAC tokens:
-> `dev-token-bob-REPLACE-ME` = readonly (write → denied), `dev-token-root-REPLACE-ME` = admin.
+> an MCP client → demo_file_server), then `gatekeeper tail` / `gatekeeper verify` / `gatekeeper show <call_id>`.
+> RBAC tokens: `dev-token-bob-REPLACE-ME` = readonly (write → denied), `dev-token-root-REPLACE-ME` = admin.
 > **How to resume:** fresh session → run **`/playbook`** or **`/build`** directly.
 
 ---
@@ -368,6 +369,7 @@ contract (unknown token → raise; policy/ledger error → deny; classifier erro
 | **Tamper-evident audit ledger** (keyed-HMAC hash-chain `LedgerStore`: append/read/get/verify + `verify`/`tail` CLI) | ✅ append-only · fail-closed HMAC key · detects edit/delete/reorder/insert/wrong-key · PII-safe (hash+redacted) · tenant filter · no secret in code | **Live:** migrate→append 3→`verify` OK+head (exit 0)→raw-SQL tamper→`verify` TAMPERED@seq=2 (exit 1). **Tests:** 29 (9 new) incl. tamper/delete/wrong-key. **/security-review:** no findings ≥8. **/code-review:** cleanups applied. ruff+mypy clean; `alembic check` no drift. | [docs/features/ledger.md](docs/features/ledger.md) |
 | **Transparent governed MCP proxy (M1.1)** — stdio proxy (`gatekeeper serve`) re-exposing upstream tools by original name; pipeline identity→classify→audit-before→forward→audit-outcome; `StaticTokenResolver`, `McpUpstreamClient`, `ActionClassifier`, `build_runtime` | ✅ no ungoverned bypass (forward only inside `handle`) · audit-before-act fail-closed · fail-closed identity (deny recorded, token never echoed, `serve` refuses unauth) · every call audited (`validate_input=False`) · PII-safe (args→`payload_hash`, output→status-only summary, `raw` excluded) · no secret in code | **Live (real CLI+subprocess):** `serve` ← MCP client → `demo_file_server`: list_tools(4)→write+read transparent (`live-proof`)→`tail` 4 entries→`verify` OK exit 0; unauth token & no-key → exit 2. **Tests:** 58 (28 new) unit+integration(real upstream)+adversarial(unauth/append-fail/tamper). **/code-review (high):** 6 findings fixed (session-open race, unaudited-pre-handler, output-in-ledger, double-boot, audit-drift, canonicalization). **/security-review:** no findings ≥8. ruff+mypy(strict) clean. | [docs/features/proxy.md](docs/features/proxy.md) |
 | **Identity + RBAC policy-as-code — Cedar (M1.2)** — `CedarPolicyEngine` (policy adapter) inserted as the PDP at pipeline step 3 (replaces M1.1 allow-all); evaluates (role × action × tool) against version-controlled `policies/gatekeeper.cedar` → allow/deny+reason; `PolicyDenied` error; `_build_policy` config-selected; transport surfaces deny | ✅ **authorized per role×action×tool from config (no hardcoded rule)** · readonly-write **denied+recorded+not forwarded**, allowed call passes — **both** decisions recorded · fail-closed eval (default-deny, unknown-role/NoDecision/any error → DENY) · fail-loud load (missing/empty/unparseable/zero-statement policy → refuse boot) · no policy/entity injection (structured-dict request, escaped EUIDs) · no token leak in reason/log · pipeline stays SDK-free | **Live (real composition root + CLI):** bob/readonly `write_file`→**DENY** (1 entry, no disk write), bob `list_dir`→ALLOW, alice/operator write→ALLOW (decision+outcome); `tail` verdicts, `verify` OK exit 0, `health` shows `policy=cedar`. **Tests:** 77 (19 new) — unit `test_policy` (RBAC matrix, fail-loud×4, fail-closed eval, escaping) + pipeline deny-once-not-forwarded; adversarial readonly-write-denied on **real Cedar+ledger** (verify ok); integration denied-write-leaves-no-file on **real upstream**. **/code-review (high, 2 finders):** no contract bugs; 2 hardening items taken (zero-statement load guard, eval-error log detail). **/security-review:** no findings ≥8 (9/10, verified vs live engine). ruff+mypy(strict) clean. | [docs/features/rbac.md](docs/features/rbac.md) |
+| **Tamper-evidence gate + `show` (M1.3)** — gate confirming the hash-chain `verify` holds against the now-RBAC ledger (allow+deny verdicts) + implemented `gatekeeper show <call_id>` (operator inspection of one recorded decision via existing `LedgerStore.get`; no new port method) | ✅ **M1.3 exit met:** `verify` passes intact & **pinpoints `seq`** on alter/delete/insert — confirmed on a ledger of RBAC verdicts · `show` exit 0/1/2 (found/not-found/misconfig), fail-loud/closed via reused `_opened_ledger` · **no token/key leak** (entry holds principal/role + HMAC digests only; key in `.env`) asserted by test · PII-safe by construction · no injection (parameterized `call_id`) · Windows-console-safe (`box.ASCII`) · reuse-not-reinvent | **Live (real CLI + SQLite):** seed allow+deny via real append-chain → `tail` both → `show <allow>`/`<deny>` full decision (deny.prev_hash == allow.entry_hash) → `show <missing>` exit 1 → `verify` OK exit 0 → raw-SQL flip deny→allow → `verify` **TAMPERED@seq=2** exit 1 (show still renders the altered row → read/verify split). **Tests:** 82 (5 new `test_cli_show`: found-allow/deny, not-found→1, no-leak, console-safe). **/code-review (high):** no findings. **/security-review:** no **new** vuln ≥8 — the one ≥8 (`get()` not tenant-scoped) is the **pre-existing documented limitation** consistent with `tail`, tied to the deferred multi-tenant trigger. ruff+mypy(strict) clean. | [docs/features/tamper-evidence.md](docs/features/tamper-evidence.md) |
 
 **Known limitations (recorded, not silent):** tail-truncation undetectable by a bare chain (mitigation:
 `verify` emits head hash to pin out-of-band; full anchoring deferred) · `get()` not tenant-scoped (safe

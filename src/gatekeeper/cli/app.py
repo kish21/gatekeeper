@@ -22,6 +22,7 @@ from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.config.loader import ConfigError, boot, get_settings, ledger_path
 from gatekeeper.infra.logging import configure_logging, get_logger
+from gatekeeper.schemas.enums import Verdict
 
 app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
@@ -144,8 +145,41 @@ def verify() -> None:
 
 @app.command()
 def show(call_id: str) -> None:
-    """Show the recorded decision for one call id."""
-    raise NotImplementedError(_TODO)
+    """Show the recorded audit entry + governance decision for one call id.
+
+    Exit 0=found, 1=no entry for that call id, 2=misconfig. Pairs with ``verify``:
+    ``verify`` proves the whole chain is intact, ``show`` inspects one recorded decision.
+    """
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.show")
+    with _opened_ledger() as store:
+        # call_id is bound as a query parameter by the ORM (no injection); not found -> None.
+        entry = store.get(call_id)
+    if entry is None:
+        _console.print(f"[bold yellow]not found[/] no audit entry for call_id={call_id!r}")
+        log.info("show miss", extra={"call_id": call_id})
+        raise typer.Exit(code=1)
+
+    # Render the recorded decision. Every field below is PII-safe by construction: the ledger
+    # stores principal/role (never the token) and HMAC digests (never the key), and raw
+    # arguments/output are never persisted (only payload_hash + a redacted result_summary).
+    verdict_color = "green" if entry.verdict == Verdict.ALLOW else "red"
+    table = Table(title=f"audit entry - call {entry.call_id}", show_header=False, box=box.ASCII)
+    table.add_row("seq", str(entry.seq))
+    table.add_row("ts (UTC)", entry.ts)
+    table.add_row("tenant", entry.tenant)
+    table.add_row("principal", f"{entry.principal} (role={entry.role})")
+    table.add_row("tool", f"{entry.upstream}:{entry.tool}")
+    table.add_row("action", str(entry.action_kind))
+    table.add_row("verdict", f"[bold {verdict_color}]{entry.verdict}[/]")
+    table.add_row("reason", entry.reason)
+    table.add_row("result", entry.result_summary or "-")
+    table.add_row("risk", "-" if entry.risk is None else f"{entry.risk:.2f}")
+    table.add_row("payload_hash", entry.payload_hash)
+    table.add_row("prev_hash", entry.prev_hash or "-")
+    table.add_row("entry_hash", entry.entry_hash or "-")
+    _console.print(table)
+    _console.print("Run `gatekeeper verify` to confirm the chain that contains this entry.")
 
 
 @app.command(name="seed-demo")
