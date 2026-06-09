@@ -16,5 +16,9 @@ class IdentityError(GatewayError):
     """An opaque token could not be resolved to a Principal — the call is unauthenticated."""
 
 
+class PolicyDenied(GatewayError):
+    """The policy engine denied this (principal, call) — RBAC said no. Recorded, never forwarded."""
+
+
 class UpstreamError(GatewayError):
     """A registered upstream could not be reached or returned a transport-level failure."""

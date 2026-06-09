@@ -21,7 +21,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 from gatekeeper.config.loader import get_settings
-from gatekeeper.domain.errors import IdentityError
+from gatekeeper.domain.errors import IdentityError, PolicyDenied
 from gatekeeper.gateway.factory import GatewayRuntime, build_runtime
 from gatekeeper.infra.logging import configure_logging, get_logger
 
@@ -71,7 +71,9 @@ def _build_server(
             result = await runtime.pipeline.handle(
                 token=token, upstream=upstream, tool=name, arguments=arguments, call_id=call_id
             )
-        except IdentityError as exc:
+        except (IdentityError, PolicyDenied) as exc:
+            # Authn failure OR RBAC deny — both surface to the agent as an error; the call was
+            # already recorded by the pipeline and was never forwarded (fail-closed).
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=f"denied: {exc}")], isError=True
             )

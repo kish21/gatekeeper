@@ -13,13 +13,16 @@ from typing import Any
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import ConfigError, boot
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.ports.identity import IdentityResolver
+from gatekeeper.ports.policy import PolicyEngine
 
 _DEFAULT_UPSTREAM_TIMEOUT = 30.0
+_DEFAULT_POLICY_DIR = "./policies"
 
 
 @dataclass
@@ -45,6 +48,14 @@ def _build_identity(platform: dict[str, Any], identities: list[dict[str, Any]]) 
     return StaticTokenResolver.from_config(identities)
 
 
+def _build_policy(platform: dict[str, Any]) -> PolicyEngine:
+    kind = platform.get("adapters", {}).get("policy", "cedar")
+    if kind != "cedar":
+        raise ConfigError(f"policy adapter {kind!r} not supported yet (cedar only).")
+    policy_dir = platform.get("policy", {}).get("dir", _DEFAULT_POLICY_DIR)
+    return CedarPolicyEngine.from_config(policy_dir)  # fail-loud on a missing/unparseable policy
+
+
 def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) -> ActionClassifier:
     write_detection = product.get("write_detection", {})
     annotations = {
@@ -64,6 +75,7 @@ def build_runtime() -> GatewayRuntime:
     upstreams = config["upstreams"]
 
     identity = _build_identity(platform, config["identities"])
+    policy = _build_policy(platform)
     classifier = _build_classifier(product, upstreams)
 
     timeout = float(
@@ -76,6 +88,7 @@ def build_runtime() -> GatewayRuntime:
     pipeline = GatewayPipeline(
         identity=identity,
         classifier=classifier,
+        policy=policy,
         ledger=ledger,
         upstream=upstream,
         hmac_key=settings.hmac_key,

@@ -16,11 +16,11 @@ import pytest
 
 from gatekeeper.adapters.ledger.hashchain import compute_payload_hash
 from gatekeeper.domain.classify import ActionClassifier
-from gatekeeper.domain.errors import IdentityError
+from gatekeeper.domain.errors import IdentityError, PolicyDenied
 from gatekeeper.gateway.pipeline import UNAUTHENTICATED_PRINCIPAL, GatewayPipeline
 from gatekeeper.schemas.enums import ActionKind, Verdict
 from gatekeeper.schemas.ledger import LedgerEntry, VerifyResult
-from gatekeeper.schemas.models import Principal, ToolCall, ToolResult
+from gatekeeper.schemas.models import Decision, Principal, ToolCall, ToolResult
 
 KEY = "k" * 64
 PATTERNS = ["delete*", "write*"]
@@ -68,6 +68,17 @@ class RecordingLedger:
         raise NotImplementedError
 
 
+class FakePolicy:
+    """A stand-in PolicyEngine: returns a fixed verdict so the pipeline is tested in isolation."""
+
+    def __init__(self, verdict: Verdict = Verdict.ALLOW, reason: str = "ok") -> None:
+        self._verdict = verdict
+        self._reason = reason
+
+    def evaluate(self, principal: Principal, call: ToolCall) -> Decision:
+        return Decision(call_id=call.call_id, verdict=self._verdict, reason=self._reason)
+
+
 class RecordingUpstream:
     def __init__(self, events: list[tuple], result: ToolResult) -> None:
         self._events = events
@@ -86,10 +97,12 @@ def _pipeline(
     upstream: RecordingUpstream,
     ledger: RecordingLedger,
     mapping: dict[str, Principal] | None = None,
+    policy: FakePolicy | None = None,
 ) -> GatewayPipeline:
     return GatewayPipeline(
         identity=FakeIdentity(mapping or {"tok": Principal(id="alice", role="operator")}),
         classifier=ActionClassifier(name_patterns=PATTERNS, upstream_annotations=ANNOTATIONS),
+        policy=policy or FakePolicy(),
         ledger=ledger,
         upstream=upstream,
         hmac_key=KEY,
@@ -172,3 +185,27 @@ async def test_payload_hash_recorded_and_raw_args_never_persisted() -> None:
     entry = ledger.entries[0]
     assert entry.payload_hash == compute_payload_hash(KEY, secret_args)
     assert "hunter2" not in entry.model_dump_json()  # plaintext secret never stored
+
+
+async def test_policy_deny_is_recorded_once_and_not_forwarded() -> None:
+    events: list[tuple] = []
+    upstream = RecordingUpstream(events, ToolResult(call_id="x", ok=True, summary="ok"))
+    ledger = RecordingLedger(events)
+    pipe = _pipeline(
+        events,
+        upstream=upstream,
+        ledger=ledger,
+        policy=FakePolicy(Verdict.DENY, "role 'readonly' may not write"),
+    )
+
+    with pytest.raises(PolicyDenied, match="readonly"):
+        await pipe.handle(
+            token="tok", upstream="demo", tool="write_file", arguments={"x": 1}, call_id="c6"
+        )
+
+    assert upstream.forwarded == []  # fail-closed authorization: a denied call is never forwarded
+    assert len(ledger.entries) == 1  # exactly one entry — the recorded deny (no outcome entry)
+    denied = ledger.entries[0]
+    assert denied.verdict is Verdict.DENY
+    assert denied.reason == "role 'readonly' may not write"
+    assert denied.result_summary == ""  # deny is recorded before any forward, so no result

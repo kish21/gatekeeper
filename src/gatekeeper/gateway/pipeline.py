@@ -1,18 +1,20 @@
 """The Policy Enforcement Point (PEP) — the governed pipeline every tool call passes through.
 
-Chain (this slice, M1.1): ``identity -> classify -> AUDIT(decision) -> forward -> AUDIT(result)``.
-RBAC (Cedar allow/deny) lands in M1.2 between identity and audit; for now an authenticated call is
-allowed (``allow-all``) and an unknown token is denied — both recorded.
+Chain (M1.2): ``identity -> classify -> POLICY(RBAC) -> AUDIT(decision) -> forward -> AUDIT``.
+The Cedar ``PolicyEngine`` now decides allow/deny per (role x action x tool); an authenticated but
+*unauthorized* call (e.g. a ``readonly`` role calling a write) is denied with a reason and recorded,
+exactly like an unknown token — never forwarded.
 
-Two invariants make the north-star ("no call slips past, all provable") literally true:
-  * **Audit-before-act (ADR-003):** the decision entry is appended to the tamper-evident ledger
-    BEFORE the upstream forward. If that append raises, we fail-closed — the forward never happens.
+Three invariants make the north-star ("no call slips past, all provable") literally true:
+  * **Audit-before-act (ADR-003):** the decision entry (allow OR deny) is appended to the
+    tamper-evident ledger BEFORE any upstream forward. If that append raises, we fail-closed.
   * **Fail-closed identity:** a bad token is denied AND audited, then raised (never forwarded).
+  * **Fail-closed authorization:** a policy deny is audited, then raised — the forward never runs.
 
-The forward is the only side effect and it lives inside ``handle``, so a call cannot be forwarded
-without first being governed and audited (no bypass path). Two chained entries per allowed call —
-the committed-before-act decision and the after-the-fact outcome — give the full verifiable history
-("an entry" in the M1.1 exit criterion, made stronger to honor ADR-003; see the feature doc).
+The forward is the only side effect and it lives inside ``handle``, after a recorded ALLOW, so a
+call cannot be forwarded without first being authenticated, authorized, and audited (no bypass).
+An allowed call yields two chained entries (committed-before-act decision + after-the-fact outcome);
+a denied call yields one (the deny decision). See the feature doc.
 
 The pipeline is SDK-free: it speaks only typed DTOs + ports, so it is fully unit-testable via fakes.
 """
@@ -25,15 +27,16 @@ from typing import Any
 
 from gatekeeper.adapters.ledger.hashchain import compute_payload_hash
 from gatekeeper.domain.classify import ActionClassifier
-from gatekeeper.domain.errors import IdentityError
+from gatekeeper.domain.errors import IdentityError, PolicyDenied
 from gatekeeper.infra.logging import get_logger
 from gatekeeper.infra.tracing import ErrorReporter, default_reporter
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.ledger import LedgerStore
+from gatekeeper.ports.policy import PolicyEngine
 from gatekeeper.ports.upstream import UpstreamClient
 from gatekeeper.schemas.enums import ActionKind, Verdict
 from gatekeeper.schemas.ledger import LedgerEntry
-from gatekeeper.schemas.models import Decision, Principal, ToolCall, ToolResult
+from gatekeeper.schemas.models import Principal, ToolCall, ToolResult
 
 #: Recorded as the principal/role of a call whose token could not be authenticated.
 UNAUTHENTICATED_PRINCIPAL = "<unauthenticated>"
@@ -53,6 +56,7 @@ class GatewayPipeline:
         *,
         identity: IdentityResolver,
         classifier: ActionClassifier,
+        policy: PolicyEngine,
         ledger: LedgerStore,
         upstream: UpstreamClient,
         hmac_key: str,
@@ -61,6 +65,7 @@ class GatewayPipeline:
     ) -> None:
         self._identity = identity
         self._classifier = classifier
+        self._policy = policy
         self._ledger = ledger
         self._upstream = upstream
         self._key = hmac_key
@@ -98,15 +103,19 @@ class GatewayPipeline:
             )
             raise
 
-        # 2. Classify read/write (config-driven; enriches audit, gates M2).
+        # 2. Classify read/write (config-driven; enriches audit + feeds the policy action).
         action = self._classifier.classify(upstream, tool)
-
-        # 3. Decision — M1.1 allow-all for authenticated callers (RBAC is M1.2).
-        decision = Decision(
+        call = ToolCall(
             call_id=call_id,
-            verdict=Verdict.ALLOW,
-            reason=f"authenticated principal '{principal.id}' (M1.1 allow-all; RBAC in M1.2)",
+            upstream=upstream,
+            tool=tool,
+            arguments=arguments,
+            action_kind=action,
         )
+
+        # 3. Policy (RBAC, ADR-002) — Cedar decides allow/deny per (role x action x tool).
+        #    The engine is fail-closed (any error -> DENY); default decision is deny.
+        decision = self._policy.evaluate(principal, call)
 
         # A per-call recorder bound to the constants for this call, so the decision and outcome
         # entries can never drift on who/what/verdict — only reason + result_summary vary.
@@ -124,16 +133,27 @@ class GatewayPipeline:
         # 4. AUDIT BEFORE ACT (ADR-003) — if this raises, we never forward (fail-closed).
         audit(reason=decision.reason, result_summary="")
 
-        # 5. Forward to the real upstream (never raises; failures come back ok=False).
-        result = await self._upstream.forward(
-            ToolCall(
-                call_id=call_id,
-                upstream=upstream,
-                tool=tool,
-                arguments=arguments,
-                action_kind=action,
+        # 4b. Fail-closed authorization: a denied call is recorded (above) and then refused — the
+        #     forward below is unreachable on a deny, so an unauthorized call has no side effect.
+        if decision.verdict is Verdict.DENY:
+            self._reporter.report(
+                "call.denied.policy", call_id=call_id, upstream=upstream, tool=tool
             )
-        )
+            self._log.warning(
+                "call denied: policy",
+                extra={
+                    "call_id": call_id,
+                    "principal": principal.id,
+                    "role": principal.role,
+                    "upstream": upstream,
+                    "tool": tool,
+                    "action": action.value,
+                },
+            )
+            raise PolicyDenied(decision.reason)
+
+        # 5. Forward to the real upstream (never raises; failures come back ok=False).
+        result = await self._upstream.forward(call)
 
         # 6. AUDIT THE OUTCOME — a second chained entry completing the call's lifecycle.
         audit(
