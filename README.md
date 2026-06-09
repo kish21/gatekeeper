@@ -37,13 +37,36 @@ control or failing an audit.
 
 ## Quickstart
 
+GateKeeperAI is a **stdio MCP server your agent connects to**. The repo ships with a working demo
+target (`config/upstreams.yaml` → a local `demo_file_server`), so you can try governance end-to-end
+with no extra setup.
+
 ```bash
 make install        # deps + git hooks
-cp .env.example .env && $EDITOR .env   # set GATEKEEPER_HMAC_KEY
-make seed           # example upstream + identities + policy
-make serve          # run the governed gateway
-make verify         # prove the audit ledger is intact
+cp .env.example .env # then set two values in .env (see below)
+make migrate        # create the tamper-evident audit ledger
+make serve          # run the gateway as a stdio MCP server (waits for a client to connect)
 ```
+
+Set these in `.env` (neither is an external API key):
+
+| Variable | Value | What it's for |
+|---|---|---|
+| `GATEKEEPER_HMAC_KEY` | output of `openssl rand -hex 32` | local key for the ledger hash-chain (required to boot) |
+| `GATEKEEPER_AGENT_TOKEN` | `dev-token-alice-REPLACE-ME` (a dev token from `config/identities.yaml`) | identifies the connecting agent; unknown/unset → refused |
+
+Point your MCP client/agent at the `gatekeeper serve` command (the same way you'd register any stdio
+MCP server). It sees the upstream's tools, and **every call is authenticated, decided, and recorded
+before being forwarded**. Then, in any shell:
+
+```bash
+make tail           # view the audit trail
+make verify         # prove the ledger is intact (exit 0 = untampered)
+```
+
+> **Not an external service:** `serve` runs entirely local (gateway → a local demo server). No network
+> call leaves your machine and no LLM/API key is involved in M1 — that arrives with M2 risk-scoring.
+> A one-command demo driver (`seed-demo`) and a fuller usage guide land in **M1.4**.
 
 ## Status
 
@@ -52,7 +75,7 @@ Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan,
 
 | Milestone | Scope | State |
 |---|---|---|
-| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | building |
+| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | building — **M1.1 ✅** transparent proxy + audit feed · **M1.2** RBAC next · M1.3/M1.4 pending |
 | **M2** | LLM risk-scoring + human write-approval | planned |
 
 ## License
