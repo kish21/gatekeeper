@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
+from typing import Any
 
 from gatekeeper.schemas.ledger import LedgerEntry
 
@@ -20,10 +22,25 @@ from gatekeeper.schemas.ledger import LedgerEntry
 _EXCLUDED: set[str] = {"seq", "prev_hash", "entry_hash"}
 
 
+def _canonical_json(data: Any, *, default: Callable[[Any], Any] | None = None) -> str:
+    """The ONE canonicalization: sorted keys, no whitespace. Both hashes below share it."""
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), default=default)
+
+
 def canonical_payload(entry: LedgerEntry) -> str:
     """Deterministic JSON of an entry's business fields (sorted keys, compact, enums as values)."""
-    data = entry.model_dump(mode="json", exclude=_EXCLUDED)
-    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return _canonical_json(entry.model_dump(mode="json", exclude=_EXCLUDED))
+
+
+def compute_payload_hash(key: str, arguments: dict[str, Any]) -> str:
+    """Keyed HMAC-SHA256 of a tool call's arguments (PII-safe fingerprint for the ledger).
+
+    Raw arguments are NEVER persisted (they may carry secrets/PII); only this keyed digest is
+    stored, so an auditor can still prove "the same arguments were called twice" without the gateway
+    keeping the plaintext. Canonicalized (sorted keys, compact) so identical args hash identically.
+    """
+    canonical = _canonical_json(arguments, default=str)
+    return hmac.new(key.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def compute_entry_hash(key: str, prev_hash: str, entry: LedgerEntry) -> str:

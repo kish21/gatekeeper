@@ -86,8 +86,20 @@ def health() -> None:
 
 @app.command()
 def serve() -> None:
-    """Run the governed gateway."""
-    raise NotImplementedError(_TODO)
+    """Run the governed gateway (transparent stdio MCP proxy) over stdio.
+
+    Exit 2 on misconfig (no HMAC key / no ledger table) or an unauthenticated agent token.
+    """
+    import anyio
+
+    from gatekeeper.domain.errors import IdentityError
+    from gatekeeper.transport.stdio_server import serve_stdio
+
+    try:
+        anyio.run(serve_stdio)
+    except (ConfigError, IdentityError) as exc:
+        _console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
+        raise typer.Exit(code=2) from exc
 
 
 @app.command()

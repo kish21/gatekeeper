@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     hmac_key: str = Field(
         default="", description="Keyed-HMAC key for the audit hash-chain (ADR-003)."
     )
+    agent_token: str = Field(
+        default="",
+        description="Bearer token the agent presents to the gateway (resolved to a Principal).",
+    )
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     config_dir: Path = Field(default=Path("./config"))
