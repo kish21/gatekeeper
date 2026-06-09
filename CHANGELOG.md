@@ -33,3 +33,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   ledger now carrying RBAC allow/deny verdicts, and added **`gatekeeper show <call_id>`** to inspect
   the recorded governance decision for one call (exit 0 found / 1 not-found / 2 misconfig; no
   token/key leak; PII-safe).
+- **Config-driven any-server + operator CLI (M1.4):** brought a **real, third-party MCP server**
+  (`mcp-server-time`, installed via the `demo` extra) under full governance by **editing
+  `config/upstreams.yaml` only — zero gateway code**, proving the tool-agnostic promise end-to-end.
+  Implemented **`gatekeeper seed-demo`** (non-destructive: seeds the demo sandbox + prints a run
+  recipe; shows principal+role but never tokens). Hardened the proxy so one unavailable upstream is
+  logged and **skipped** instead of crashing the gateway (no ungoverned bypass).
+
+### Changed
+- CI now installs the `demo` extra in both the test job (so the "govern any server" proof runs for
+  real) and the security job (so `mcp-server-time` is also CVE-scanned by pip-audit).
+
+### Fixed
+- **Upstream session teardown (`McpUpstreamClient.aclose()`):** a pre-existing latent bug where
+  shutdown could raise `RuntimeError: Attempted to exit cancel scope in a different task` when an
+  upstream session was first opened inside a forward's child task (the MCP server dispatches calls via
+  `tg.start_soon`). Each session's anyio lifecycle is now pinned to one dedicated task, so it is opened
+  and closed in the same task; `aclose()` is safe to call from any task and never raises on shutdown.

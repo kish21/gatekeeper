@@ -60,14 +60,27 @@ MCP server). It sees the upstream's tools, and **every call is authenticated, de
 before being forwarded**. Then, in any shell:
 
 ```bash
+gatekeeper seed-demo               # prepare the demo sandbox + print a ready-to-run recipe
 make tail                          # view the audit trail
 make verify                        # prove the ledger is intact (exit 0 = untampered)
 gatekeeper show <call_id>          # inspect the recorded decision for one call
 ```
 
-> **Not an external service:** `serve` runs entirely local (gateway → a local demo server). No network
+### Govern any server by config (zero code)
+
+The repo ships a **second, real upstream** to prove the tool-agnostic promise: `config/upstreams.yaml`
+registers the third-party `mcp-server-time` server (which GateKeeperAI did **not** write). Install it
+and it's governed exactly like the demo files — no gateway code:
+
+```bash
+pip install -e ".[demo]"           # adds the real third-party MCP server (mcp-server-time)
+```
+
+To govern *your own* MCP server, add a block to `config/upstreams.yaml` (name, transport, command) —
+that's the entire integration. One unavailable upstream is logged and skipped, never fatal.
+
+> **Not an external service:** `serve` runs entirely local (gateway → local upstreams). No network
 > call leaves your machine and no LLM/API key is involved in M1 — that arrives with M2 risk-scoring.
-> A one-command demo driver (`seed-demo`) and a fuller usage guide land in **M1.4**.
 
 ## Status
 
@@ -76,7 +89,7 @@ Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan,
 
 | Milestone | Scope | State |
 |---|---|---|
-| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | building — **M1.1 ✅** transparent proxy · **M1.2 ✅** identity + RBAC (Cedar) · **M1.3 ✅** tamper-evidence + `verify`/`show` · M1.4 (config-driven any-server + `seed-demo`) next |
+| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | **M1.1 ✅** transparent proxy · **M1.2 ✅** identity + RBAC (Cedar) · **M1.3 ✅** tamper-evidence + `verify`/`show` · **M1.4 ✅** config-driven any-server (real 3rd-party server governed, zero code) + `seed-demo` · **M1 exit gate (`/dev-check`) next** |
 | **M2** | LLM risk-scoring + human write-approval | planned |
 
 ## License

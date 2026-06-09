@@ -29,11 +29,27 @@ _SERVER_NAME = "gatekeeper"
 
 
 async def _build_tool_index(runtime: GatewayRuntime) -> dict[str, tuple[str, types.Tool]]:
-    """Map each upstream tool name -> (upstream, Tool). First wins on a cross-upstream collision."""
+    """Map each upstream tool name -> (upstream, Tool). First wins on a cross-upstream collision.
+
+    Resilient to a single bad upstream (M1.4): since any MCP server is registered purely by
+    config, one that fails to launch or list its tools (missing package, wrong command,
+    unreachable) must NOT take down governance for the healthy ones. Such an upstream is logged and
+    SKIPPED - its tools are simply not exposed, so no call to it is possible (no ungoverned
+    bypass); every other upstream stays governed. The `gateway ready` log lists the tools actually
+    exposed, so a skipped upstream is visible.
+    """
     logger = get_logger("gatekeeper.transport")
     index: dict[str, tuple[str, types.Tool]] = {}
     for upstream in runtime.upstream.upstream_names():
-        for tool in await runtime.upstream.list_tools(upstream):
+        try:
+            tools = await runtime.upstream.list_tools(upstream)
+        except Exception as exc:  # noqa: BLE001 — isolate a bad upstream; never crash the gateway
+            logger.error(
+                "upstream unavailable; skipping (its tools will not be exposed)",
+                extra={"upstream": upstream, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            continue
+        for tool in tools:
             if tool.name in index:
                 logger.warning(
                     "tool name collision; keeping first",
