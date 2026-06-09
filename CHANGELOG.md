@@ -39,6 +39,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   Implemented **`gatekeeper seed-demo`** (non-destructive: seeds the demo sandbox + prints a run
   recipe; shows principal+role but never tokens). Hardened the proxy so one unavailable upstream is
   logged and **skipped** instead of crashing the gateway (no ungoverned bypass).
+- **Evaluation (M1 measured):** a reproducible latency eval harness
+  `tests/eval/bench_governance_latency.py` that measures the **added gateway governance overhead**
+  (classify → Cedar → keyed-HMAC → SQLite append) on the real pipeline with a zero-latency upstream,
+  plus a `--diagnose` mode that attributes the overhead to its components and measures the WAL
+  mitigation. A config-driven budget knob `config/platform.yaml perf.overhead_p95_ms` (the ADR-001
+  baseline) gates regressions. Findings recorded honestly in `PRODUCT.md#Evaluation`: coverage 100% /
+  0 bypass, RBAC golden 13/13, **0 operational failures** — and one honest miss, p95 overhead ~2× the
+  10 ms budget, root-caused to the durable audit commit with a quantified WAL fix queued for M2.
 
 ### Changed
 - CI now installs the `demo` extra in both the test job (so the "govern any server" proof runs for

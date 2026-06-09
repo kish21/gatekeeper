@@ -30,3 +30,10 @@ resilience:
 logging:
   level: INFO
   format: json             # structured logs for SIEM ingestion
+
+# Performance budget — the added gateway overhead over a direct upstream call
+# (classify + Cedar eval + keyed-HMAC + SQLite append, EXCLUDING upstream I/O).
+# Measured + gated by tests/eval/bench_governance_latency.py (the /eval baseline,
+# ADR-001 latency budget). A p95 above this is a regression and fails the harness.
+perf:
+  overhead_p95_ms: 10.0    # ADR-001 / Architecture#Perf budget: p95 < ~10 ms (M1, deterministic)
