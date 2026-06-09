@@ -13,9 +13,19 @@
 > code+security reviewed clean). See `#Build log` +
 > [docs/features/config-driven-any-server.md](docs/features/config-driven-any-server.md).
 > **➡ M1.4 was the last M1 slice — all of M1 is now built.**
-> **Next phase:** **`/dev-check` — the M1 exit gate.** Verify every M1 slice is on the live path + met
-> its security DoD; confirm a fresh user can govern an arbitrary MCP server from config + docs alone; then
-> M1 is development-complete and the chain moves to **`/test`** → `/eval` → M2.
+> **`/dev-check` ✅ PASSED (2026-06-09):** M1 is **development-complete**. Re-run this session on HEAD
+> `ead36d9`: 93/93 tests green (0 skipped, incl. real-subprocess integration + adversarial), ruff/format/
+> mypy/alembic-drift clean, CI both jobs green, no god-files, no hardcoding, **no scope creep** (M2 dirs
+> are empty seams). Every M1 exit criterion proven by a named live-path test. **Phase confidence 93%.**
+> See `#Dev-complete` for the full evidence checklist + honest gaps.
+> **`/test` ✅ DONE (2026-06-09):** dedicated unit/integration/regression + adversarial + golden pass.
+> **112 tests green (0 skipped, +19 this slice)**, ruff/format/mypy-strict clean, CI runs `pytest` on
+> every push+PR (real merge gate). New: a **golden RBAC eval dataset** (`tests/golden/`) vs the shipped
+> Cedar policy; adversarial **classification→RBAC evasion** surfaced + pinned as a tracked limitation
+> (unannotated destructive tool → readonly allowed; mitigation = annotation, backstop = M2 LLM
+> classifier); **read access-scoping** asserted (`read(principal=)` isolates, `get()` not scoped =
+> documented). Prompt-injection/jailbreak (OWASP-LLM) deferred to M2 (no M1 LLM path). See `#Tests`.
+> **Next phase:** **`/eval`** — judge whether M1 is actually *good* (measured), then → M2.
 > **Dev setup:** `.venv` has full deps incl. the `demo` extra (`pip install -e ".[demo]"`). Demo:
 > `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`, `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`,
 > `make migrate`, `gatekeeper seed-demo`, `gatekeeper serve` (drive with an MCP client → demo_file_server + the
@@ -381,13 +391,134 @@ contract (unknown token → raise; policy/ledger error → deny; classifier erro
 
 **Known limitations (recorded, not silent):** tail-truncation undetectable by a bare chain (mitigation:
 `verify` emits head hash to pin out-of-band; full anchoring deferred) · `get()` not tenant-scoped (safe
-today: UUID call_ids + single tenant) · single-writer append assumption.
+today: UUID call_ids + single tenant) · single-writer append assumption · **classification→RBAC evasion**
+— an unannotated destructive tool whose name matches no `write_detection` pattern is classified read, so
+`readonly` may call it (mitigation today: explicit `writes:` annotation; backstop: M2 LLM classifier per
+ADR-005). All four are tracked by asserted tests — see `#Tests`.
 
 ## Dev-complete
-_(unfilled — `/dev-check`)_
+
+**M1 development-complete gate — PASSED.** Every box ticked **with re-run evidence** (verified this
+session on the exact `main` HEAD `ead36d9`, not assumed). The earlier "TAMPERED@seq=1" seen while
+spot-running `verify` was a **harness artifact** (a random HMAC key pointed at a stale scratch
+`./.gatekeeper/audit.db` written under a different key) — i.e. the **wrong-key detection firing
+correctly** (matches `test_wrong_key_cannot_verify`), not a product defect.
+
+### Exit-criteria checklist (evidence, not "done")
+- [x] **Every core-scope feature has a `#Build log` row, runs, and met its DoD (incl. security).**
+  Re-verified per slice below.
+- [x] **No hardcoding · prompts externalized · contracts typed · schema↔code consistent · CI green.**
+  Hardcoding scan of `gateway/`+`domain/`+`transport/` → no secrets/URLs/tokens/thresholds (only a
+  docstring match); adapters config-selected from `platform.yaml` (proven live by `health`).
+  `alembic check` → *"No new upgrade operations detected"* (zero schema↔code drift). Prompts in
+  `src/gatekeeper/prompts/risk_classifier.yaml` (versioned; M2-only, not on the M1 path).
+- [x] **No oversized god-files; secret-scan + dep-vuln clean.** Largest source file = 277 lines
+  (`cli/app.py`); 2219 total across 49 files — single-responsibility held. `gitleaks` + `pip-audit`
+  (with `.[demo]`) **green in CI** on HEAD (run `27235863456`, both jobs `success`). *(Both scanners
+  are CI-only locally — `gitleaks` not installed; `pip-audit` blocked by the sandbox's TLS
+  interception, as documented in `#Foundation`.)*
+- [x] **Scope re-check — no creep.** M2 dirs are empty seams, not built features: `approval/` (5 lines),
+  `ai/` (6), `adapters/llm/` (6) are stubs; `ports/llm.py` (17) is a declared `Protocol`. Nothing from
+  the OUT-OF-SCOPE list (dashboard, SSO, multi-tenant, rate-limit, policy-UI, extra transports) exists.
+- [x] **Every "done" records HOW it was verified.** All 5 `#Build log` rows carry an evidence column;
+  re-confirmed below by independently re-running the named live-path tests.
+
+### Per-feature coverage (re-run this session)
+| M1 slice | Runs? | DoD incl. security — verified by |
+|---|---|---|
+| **M1.1 Transparent governed proxy** | ✅ | `test_proxy.py` (real `demo_file_server` subprocess through the gateway); `test_audit_store_failure_blocks_the_forward` (audit-before-act fail-closed); `test_unauthenticated_call_is_denied_recorded_and_never_forwarded` (identity fail-closed, no bypass). |
+| **M1.2 Identity + RBAC (Cedar)** | ✅ | `test_readonly_role_writing_is_denied_recorded_and_never_forwarded` + `...reading_is_allowed_and_forwarded` on **real Cedar + real ledger** — both decisions recorded, deny not forwarded. Policy lives in `policies/gatekeeper.cedar` (config, not code). |
+| **M1.3 Tamper-evidence + `verify`** | ✅ | `test_verify_ok_on_intact_chain` (OK), `test_verify_detects_field_tamper` / `..._deletion` / `test_wrong_key_cannot_verify` (pinpoint `seq`); live binary reproduced wrong-key → `TAMPERED@seq=1`. |
+| **M1.4 Any-server (zero code) + operator CLI** | ✅ | `test_governs_real_third_party_server_with_zero_code` + `test_lists_third_party_tools...` vs a **real `mcp-server-time` subprocess** (0 skipped). Operator binary live: `health` (exit 0, config from all sources), no-key (exit 2 fail-closed), `show <missing>` (exit 1). |
+
+### Auto-layer (re-run locally this session)
+| Check | Result |
+|---|---|
+| `ruff check .` | All checks passed (exit 0) |
+| `ruff format --check .` | 67 files already formatted |
+| `mypy` (strict) | Success: no issues in **49** source files |
+| `pytest -q` | **93 passed, 0 skipped** (21.4s) — incl. real upstream subprocess tests |
+| `alembic check` | No new upgrade operations (zero drift) |
+| GitHub Actions CI (HEAD `ead36d9`) | ✅ both jobs green: `lint·migrate·test` + `secret-scan·dep-vuln` |
+
+### Honest gaps (recorded, not silent)
+- **Security scanners are CI-only locally** — `gitleaks` not on PATH; `pip-audit` blocked by sandbox
+  TLS. Mitigation: both pass green in CI on the exact gated commit. No local-only blind spot in the
+  product, only in the local sandbox.
+- **Python 3.13 local vs 3.12 CI** — suite passes on both; no version-specific failure observed.
+- **No fresh holistic `/security-review` re-run here** — the working tree is **clean (no diff to
+  review)**, and each slice already carries a clean `/security-review` (no finding ≥8) in `#Build log`
+  / `#Ship log`. The adversarial/prompt-injection + authz-bypass security cases run next in **`/test`**.
+- **Pre-existing documented limitations carried forward** (not regressions): `get()` not tenant-scoped
+  (safe today: single tenant + UUID call_ids), tail-truncation needs out-of-band head-hash anchoring,
+  single-writer append assumption — all tied to deferred triggers in `#Scope`.
+
+**Phase confidence: 93%.**
+- **Solid (tested/verified):** 93/93 tests green incl. real-subprocess integration + adversarial RBAC/tamper; lint/format/mypy/alembic-drift clean; CI both jobs green on HEAD; live binary paths (health/fail-closed/show) exercised; every M1 exit criterion proven by a named test; no scope creep; no god-files; no hardcoding.
+- **Risky/untested:** security scanners verified only via CI (not locally); no fresh end-to-end `/security-review` this phase (clean tree → no diff); adversarial security depth is `/test`'s remit, not yet exhaustively run.
+- **To raise it:** run **`/test`** — the dedicated unit/integration/regression + adversarial (prompt-injection, authz/tenant-isolation) pass on the live path — and confirm the security scanners locally once outside the TLS-intercepting sandbox.
 
 ## Tests
-_(unfilled — `/test`)_
+
+**Pass run-this-session (HEAD `ead36d9` + this `/test` slice):** `ruff` + `ruff format --check` +
+`mypy --strict` (49 src files) clean · **112 passed, 0 skipped** (+19 this phase). The suite is a
+**real merge gate**: `.github/workflows/ci.yml` runs `pytest -q` on **every push to `main` AND every
+pull_request**, alongside lint/format/mypy/alembic + a fail-closed security job (gitleaks + pip-audit)
+— a red run blocks merge. Tests use **fake placeholder tokens** (`k*64` HMAC, `dev-token-*` ids,
+gitleaks-allowlisted); **no real secrets**.
+
+### Coverage by tier (the independent test plan)
+| Tier | What it proves | Key files |
+|---|---|---|
+| **Unit** (isolated, ports faked) | hash-chain math; config-driven read/write classification; Cedar RBAC matrix + fail-loud load + fail-closed eval + EUID-escaping; pipeline fail-closed invariants (audit-before-act, unknown-token denied, append-failure blocks forward, raw-args never persisted); contracts/migration parity; CLI `show`/`seed-demo` (no-leak, idempotent, console-safe) | `unit/test_{hashchain,classify,policy,pipeline,contracts,payload_hash,summarize,identity,cli_show,cli_seed_demo,foundation}.py` |
+| **Integration** (real contracts) | gateway pipeline vs a **real `demo_file_server` subprocess** + **real `mcp-server-time` 3rd-party subprocess**; real Cedar engine; real SQLite ledger append/read/get/verify; Alembic schema↔code; upstream anyio-lifecycle teardown | `integration/test_{proxy,any_server,ledger,migration,upstream_lifecycle}.py` |
+| **Adversarial / security** | unauthenticated call denied+recorded+never-forwarded; readonly-write denied+recorded+never-forwarded (real Cedar+ledger); audit-store-failure blocks forward; ledger tamper (alter/insert/remove/wrong-key) breaks `verify` and pinpoints `seq`; **classification→RBAC evasion** (below); **read access-scoping** (below) | `adversarial/test_{proxy_governance,governance_gaps}.py` |
+| **Golden / eval** | the RBAC contract as a labeled dataset — known `(role, action, upstream, tool) → expected verdict` run against the **shipped** `policies/gatekeeper.cedar`; the M1 analog of the M2 risk-classifier eval | `golden/rbac_golden.yaml` + `golden/test_rbac_golden.py` |
+
+### Live-path verified (tests passing ≠ it works)
+The path the product actually runs is exercised end-to-end **through the real binary path**, not only
+isolated units: `integration/test_proxy.py` and `test_any_server.py` drive the gateway as a real MCP
+**server** (subprocess) with a real MCP **client** against real upstream MCP servers — list-tools →
+call → transparent relay → 2 chained ledger entries → `verify` OK. The forward is reachable **only**
+inside `GatewayPipeline.handle` after an audited ALLOW, so there is **no ungoverned bypass path**
+(asserted by the unauthenticated + policy-deny + append-failure cases). Operator-binary live paths
+(`health` exit 0, no-key exit 2 fail-closed, `show <missing>` exit 1) are exercised in `#Dev-complete`.
+
+### Adversarial findings recorded this phase (honest, asserted — not surprises)
+- **Classification→RBAC evasion (tracked M1 limitation).** Authorization keys off the *classified*
+  `action_kind`. The M1 classifier is name-pattern + annotation based, so a destructive tool whose
+  name matches none of `write_detection.name_patterns` (`create*/update*/delete*/write*/put*/exec*/
+  run*/send*`) **and** carries no explicit `writes:` annotation — e.g. `drop_table`, `purge_*`,
+  `truncate_*`, `remove_*` — is classified **read**, and a `readonly` role is therefore **allowed** to
+  call it. It is still authenticated, classified, and **provably audited** (no call slips past *audit*);
+  what slips is the *write-intent gate*. `test_unannotated_destructive_tool_slips_past_readonly_rbac`
+  pins this; `test_annotating_the_destructive_tool_closes_the_gap` proves the lever that exists **today**
+  (an explicit `writes:` annotation → readonly denied + never forwarded) — i.e. it is a **config** gap,
+  not a hole in the enforcement path. The architectural backstop is **M2's LLM risk classifier**
+  (ADR-005, fails closed to human approval), which scores destructive calls regardless of name. When
+  M2 lands, that test should flip to a deny — the built-in regression signal.
+- **Read access-scoping.** `read(principal=…)` enforces within-tenant owner isolation (one principal
+  cannot list another's entries — `test_read_is_scoped_by_principal`). `get(call_id)` is deliberately
+  **not** principal/tenant-scoped (`test_get_is_not_principal_scoped_known_limitation`) — safe today
+  (single tenant + unguessable UUID4 call_ids), tied to the **deferred multi-tenant** trigger in `#Scope`.
+
+### Regression cases
+- The bundled `McpUpstreamClient.aclose()` cross-task cancel-scope teardown fix is locked by
+  `integration/test_upstream_lifecycle.py` (a session opened inside a forward's child task closes
+  task-safe). The ledger wrong-key false-positive (the `#Dev-complete` "TAMPERED@seq=1" harness
+  artifact) is locked by `unit/test_hashchain.py::test_wrong_key_cannot_verify`.
+
+### AI / OWASP-LLM note (scoped honestly)
+M1 has **no LLM on the request path** (`risk.enabled: false`), so prompt-injection / jailbreak (OWASP
+LLM Top-10) cases are **M2's remit** — they belong with the risk classifier and will be added to the
+golden/eval set in `/eval` → M2. The only M1 "injection" surface is the Cedar request: covered by
+`test_policy.py::test_odd_tool_name_does_not_break_evaluation` (EUID escaping — an odd tool name can't
+inject Cedar syntax). Raw tool arguments are hashed, never interpreted, and never persisted raw.
+
+**Honest gaps:** (1) the classification→RBAC limitation above is real and **only** mitigated by config +
+the (not-yet-built) M2 classifier — a security reviewer should treat unannotated upstreams as a risk
+until M2; (2) security scanners (gitleaks/pip-audit) remain CI-only locally (sandbox TLS); (3)
+prompt-injection/jailbreak eval is deferred to M2 by design (no M1 LLM path).
 
 ## Evaluation
 _(unfilled — `/eval`)_
