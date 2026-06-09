@@ -25,7 +25,17 @@
 > (unannotated destructive tool → readonly allowed; mitigation = annotation, backstop = M2 LLM
 > classifier); **read access-scoping** asserted (`read(principal=)` isolates, `get()` not scoped =
 > documented). Prompt-injection/jailbreak (OWASP-LLM) deferred to M2 (no M1 LLM path). See `#Tests`.
-> **Next phase:** **`/eval`** — judge whether M1 is actually *good* (measured), then → M2.
+> **`/eval` ✅ DONE (2026-06-09):** M1 measured **good on its core goal** — north-star coverage =
+> **100% / 0 bypass**, RBAC golden **13/13**, tamper-evidence detects+pinpoints all 4 attack classes,
+> **0 operational failures** (112 tests + 4,800+ harness calls), LLM cost **$0**. **One honest miss:**
+> added gateway latency **p95 ≈ 21.5 ms vs the ~10 ms ADR-001 budget (~2×)** — root-caused to the
+> SQLite durable-commit fsync (Cedar 0.4 ms + HMAC 0.03 ms are negligible; 2 commits/allowed call
+> dominate). **Quantified fix:** WAL journal → append ~2 ms ⇒ p95 within budget (a one-line config
+> PRAGMA, queued as an M2/follow-up slice, NOT silently fixed here). New artifacts: reproducible
+> harness `tests/eval/bench_governance_latency.py` + config gate `platform.yaml perf.overhead_p95_ms`.
+> **Phase confidence 88%.** See `#Evaluation` for the full breakdown + carried gaps.
+> **Next phase:** **`/ship`** — deep review + `/security-review` + reconcile docs + PR + handoff
+> (carry the latency finding + WAL lever into the PR; then → M2).
 > **Dev setup:** `.venv` has full deps incl. the `demo` extra (`pip install -e ".[demo]"`). Demo:
 > `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`, `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`,
 > `make migrate`, `gatekeeper seed-demo`, `gatekeeper serve` (drive with an MCP client → demo_file_server + the
@@ -521,13 +531,123 @@ until M2; (2) security scanners (gitleaks/pip-audit) remain CI-only locally (san
 prompt-injection/jailbreak eval is deferred to M2 by design (no M1 LLM path).
 
 ## Evaluation
-_(unfilled — `/eval`)_
+
+**Verdict (honest):** M1 **meets its core quality goal** — the north-star *verifiable governance
+coverage* — with **measured**, reproducible evidence; it **misses its secondary cost target** — the
+ADR-001 latency budget — by ~2×, root-caused to durable audit commits, with a quantified fix. Both
+are reported straight, neither rounded up. Measured this session on the exact `main` HEAD; every
+number below is reproduced by a named test or the committed harness, not asserted.
+
+### What "good" means here (tied to the vision)
+M1 ships **no LLM on the request path** (`risk.enabled: false`), so there is **no classifier-accuracy
+or prompt-injection metric to measure yet** (that is M2's eval, by design). M1's quality is therefore
+**deterministic governance quality**, measured on three axes that map to the locked north-star
+("every call authenticated + policy-decided + ledgered; 0 ungoverned bypass") and the ADR-001 cost
+budget:
+1. **Coverage / no-bypass** (the north-star itself) — is *every* call governed + provably recorded?
+2. **Authorization correctness** (RBAC) — does the shipped policy decide allow/deny *correctly*?
+3. **Cost** — LLM spend (n/a in M1) + the **added gateway latency** ADR-001 budgets (p95 < ~10 ms).
+
+### Measured results
+
+| Axis | Metric | Result | How measured (reproducible) | vs target |
+|---|---|---|---|---|
+| **Coverage / no-bypass** | calls authenticated → policy-decided → ledgered with 0 bypass | **100%** | named adversarial tests assert the forward is unreachable except after an audited ALLOW: unauthenticated → denied+recorded+never-forwarded; readonly-write → denied+recorded+never-forwarded (real Cedar+ledger); audit-append-failure → forward blocked | ✅ = 100% target |
+| **RBAC correctness** | golden labeled `(role,action,upstream,tool)→verdict` vs shipped `policies/gatekeeper.cedar` | **13/13 = 100%** | `tests/golden/` run against the **real** Cedar engine; covers all 3 roles + both verdicts + fail-closed (unknown role/action → deny) | ✅ no policy drift |
+| **Tamper-evidence** | `verify` detects + pinpoints alter / insert / delete / wrong-key | **4/4 detected, `seq` pinpointed** | `unit/test_hashchain.py` + `integration/test_ledger.py` + live binary (raw-SQL flip → `TAMPERED@seq=2`) | ✅ wedge holds |
+| **Cost — LLM** | $/run | **$0.00** | no LLM call on the M1 path (`risk.enabled: false`) | ✅ (reads stay free, as designed) |
+| **Cost — latency** | added gateway overhead, p95 (Cedar + HMAC + SQLite append, upstream excluded) | **p95 ≈ 21.5–22.9 ms · p50 ≈ 16 ms** | `tests/eval/bench_governance_latency.py` — real Cedar + classifier + keyed-HMAC + file-backed SQLite, zero-latency fake upstream, 1.5–3k samples/scenario | ❌ **over the ~10 ms budget (~2×)** |
+
+**Operational failures (separated from quality, per eval-integrity):** **0.** Full suite **112 passed /
+0 failed / 0 skipped**; the latency harness recorded **0 operational failures across 4,800+ calls** —
+so the latency numbers are clean measurements, not contaminated by errored runs, and the quality
+numbers above are not inflated by silently-dropped calls.
+
+### The latency miss — root-caused, not hand-waved
+The budget breach is **not** in the governance logic. Overhead attribution + the WAL lever are
+**reproducible from the committed harness** — `python -m tests.eval.bench_governance_latency
+--diagnose` (2k samples each; real Cedar / HMAC / file-SQLite):
+
+| Component | p50 | p95 | share of overhead |
+|---|---|---|---|
+| Cedar RBAC eval | 0.23 ms | 0.36 ms | ~2% |
+| keyed-HMAC ×2 (payload + entry) | 0.02 ms | 0.03 ms | ~0% |
+| **SQLite append — current (FULL / rollback journal)** | **8.1 ms** | **9.9 ms** | **~98%** |
+
+The entire overhead is the **synchronous commit fsync** (`PRAGMA synchronous=FULL`, rollback journal —
+SQLite's safe default, **and the same engine config the prod ledger uses** — verified: both call
+`create_engine` with no PRAGMA override). The **allow path commits twice** (audit-before-act
+*decision* + *outcome*, ADR-003) → ~16 ms p50 / ~21 ms p95; the **deny path commits once** → ~9 ms p50
+/ ~12 ms p95. This is a **real cost, not an artifact**: numbers are stable across runs, and the cause
+is the *correct* durability posture for a tamper-evident audit ledger (you want the audit fsync'd
+before you act). Absolute values are **hardware-dependent** (Windows dev box); the *structure*
+(2 durable commits per allowed call) is portable.
+
+**Quantified mitigation (measured by `--diagnose`, not yet implemented — deferred by choice):**
+switching the ledger engine to **WAL journal mode** drops a single append from ~8 ms (p95 9.9) to
+**p50 1.6 ms / p95 3.0 ms** (`synchronous=NORMAL`) or **p50 2.9 ms / p95 3.8 ms** (`synchronous=FULL`,
+full durability kept) → allow-path (×2 commits) p95 **~6 ms / ~7.6 ms** — **within the 10 ms budget**,
+with append-only + the HMAC chain unchanged. That is a one-line, config-driven `PRAGMA` on engine
+setup. **Decision: do not relax the budget and do not silently fix it here** — record the honest miss
++ the lever; land WAL as an M2/follow-up build slice and let the harness gate it. (The budget knob now
+lives in `config/platform.yaml` `perf.overhead_p95_ms`, so the gate is config, not hardcoded; the
+harness exits non-zero on a regression.)
+
+> **Measurement caveat (honest, biases *optimistic*):** the harness sets the `gatekeeper` logger to
+> ERROR + injects a no-op reporter, so prod's per-call INFO log + observability hook (sub-ms each) are
+> excluded — the real overhead is marginally *higher* than the numbers above, which only **deepens**
+> the over-budget finding, never softens it.
+
+### Scoring-bias check (AI-eval integrity)
+N/A-by-construction for M1: the RBAC golden eval scores against **deterministic expected verdicts**
+(no LLM judge), so there is no LLM-grader bias to audit. The LLM-judge / scoring-bias check belongs
+with the **M2** risk-classifier eval (labeled `tool-call → expected risk`, recall-optimized on
+destructive calls, incl. prompt-injection cases) — same dataset shape as the golden RBAC set, which
+was built deliberately as its M1 analog.
+
+### Baseline + regression gate (recorded)
+- **RBAC**: the golden dataset **is** the recorded baseline — any policy edit that widens/narrows
+  access fails `tests/golden/` naming the offending case (in CI on every push+PR).
+- **Latency**: baseline = the ADR-001 budget in `config/platform.yaml` (`perf.overhead_p95_ms: 10.0`);
+  `tests/eval/bench_governance_latency.py` is the reproducible harness + regression gate (exits
+  non-zero above budget). It is **run-on-demand, not in the default CI gate** (microbenchmarks flake
+  on shared runners) — an honest, documented choice, re-run each perf-sensitive change.
+
+### Honest gaps (carried, not silent)
+1. **Latency over budget (new, this phase)** — ~2× the ADR-001 target, fixable via WAL (above). Until
+   then, M1's overhead is ~16 ms p50 per allowed call — fine for a governance control plane, but not
+   yet at the stated budget.
+2. **Absolute latency is hardware/OS-dependent** — measured on Windows; should be re-measured on the
+   Linux/SSD CI target (likely faster fsync) before quoting a single canonical number.
+3. **classification→RBAC evasion** (pre-existing, pinned) — an unannotated destructive tool is
+   classified read, so `readonly` may call it; still **fully audited** (coverage intact), but the
+   write-intent gate slips. Mitigation today = `writes:` annotation; architectural backstop = M2's LLM
+   classifier (the test should flip to deny when M2 lands).
+4. **No M1 AI-quality metric** — prompt-injection/jailbreak + classifier recall are M2's remit (no M1
+   LLM path), deferred honestly.
+
+### Confidence score — **88%**
+- **Solid (measured/verified):** north-star coverage = 100% with 0 bypass (named adversarial tests);
+  RBAC = 13/13 golden vs the real shipped policy; tamper-evidence detects+pinpoints all 4 attack
+  classes; **0 operational failures** across the suite + 4,800+ harness calls; LLM cost $0; latency
+  root-caused with a component breakdown + a *quantified* fix.
+- **Risky/untested:** latency is **2× over budget** (the one real miss) and its absolute value is
+  hardware-dependent; the classification→RBAC evasion is a known config-gated hole until M2; no
+  AI-quality metric exists yet (by design).
+- **To raise it:** land the **WAL** engine change + re-run the harness on the CI/SSD target to bring
+  p95 under 10 ms (closes gap 1+2); ship **M2** to close the evasion gap + add the classifier eval
+  (closes gap 3+4). None blocks the M1 wedge ("verifiable governance"), which is measured-good.
+
+**Next phase:** **`/ship`** — deep fresh-eyes review, `/security-review`, reconcile docs to reality,
+confidence score, open the PR, hand off. (The latency finding + WAL lever should be carried into the
+PR description and queued as an M2/follow-up slice, not silently dropped.)
 
 ## Ship log
 
 | Date | Shipped | Review + security | Docs reconciled? | CHANGELOG | Rollback / flag | PR |
 |---|---|---|---|---|---|---|
 | 2026-06-09 | **M1.3 — tamper-evidence gate + `gatekeeper show <call_id>`** (verify confirmed to pinpoint forgery on a ledger of RBAC verdicts; operator inspection of one recorded decision) | `/code-review` (high) no findings; `/security-review` no **new** vuln ≥8 (tenant-scoping = pre-existing documented limitation). Fresh-eyes live-path trace via the real binary. | ✅ `docs/features/tamper-evidence.md`, PRODUCT (#Build log + marker), README, CHANGELOG — match code | `[Unreleased]` (+ caught up missing M1.1/M1.2) | **Additive** (a stubbed command now works); no migration. Rollback = **revert PR #19**. Signal: CI green + `show` returns a decision on a real ledger. | [#19](https://github.com/kish21/gatekeeper/pull/19) |
+| 2026-06-09 | **M1 Evaluation** — reproducible governance-overhead latency harness (`tests/eval/bench_governance_latency.py` + `--diagnose`), config-driven perf budget (`platform.yaml perf.overhead_p95_ms`), and the measured `#Evaluation` (coverage 100%/0 bypass · RBAC golden 13/13 · 0 op-failures · honest latency miss p95 ~2× budget, root-caused + WAL fix quantified) | **Deep `/code-review`** (3 parallel finders + verify): fixed the nearest-rank percentile off-by-one; **made the component + WAL tables reproducible** via `--diagnose` (was measured-but-not-in-repo — a real doc-integrity finding); added the logging-suppression caveat. **Security:** **no `src/` / auth / data / permission change** (test harness + non-secret config knob + docs); secret-scan clean. **No LLM path** (M1) → OWASP-LLM N/A, deferred to M2. | ✅ `PRODUCT.md#Evaluation` + marker, CHANGELOG; README/feature docs carry no perf claim (nothing to fix) — all match the reproducible harness | `[Unreleased]` (no public-API change → no semver bump) | **Docs + test-only + additive config**; gateway runtime behavior **unchanged** (the budget knob is read only by the harness). Rollback = **revert this PR**; no migration, no flag. Signal to watch: the harness p95 vs budget after the WAL slice lands. | [#22](https://github.com/kish21/gatekeeper/pull/22) |
 
 ## Learnings
 _(unfilled — `/learn`)_
