@@ -3,7 +3,10 @@
 Implements ``ports.upstream.UpstreamClient``. The ONLY layer allowed to import the MCP SDK on the
 upstream side (ports & adapters / ADR-004). Holds ONE persistent, lazily-opened session per upstream
 (re-launching a stdio server per call would be slow and lose its state) and serializes calls to each
-session with a lock (a single stdio pipe is request/response, not concurrent).
+session with a lock (a single stdio pipe is request/response, not concurrent). Each session's
+anyio-backed lifecycle is pinned to its own dedicated task (``_SessionRunner``) so it is opened and
+closed in the same task — ``aclose()`` stays correct even when the session was first opened inside a
+forward's child task (the MCP server dispatches calls via ``tg.start_soon``).
 
 Resilience (ADR-004): a per-call timeout; any failure is converted to a non-raising ``ToolResult``
 with ``ok=False`` so the agent never hangs and the pipeline can still AUDIT the outcome (fail-closed
@@ -15,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,14 +88,33 @@ def _summarize(result: types.CallToolResult) -> str:
     return f"ok: {block_count} block(s), {text_len} chars"
 
 
+@dataclass
+class _SessionRunner:
+    """One upstream session, whose anyio contexts are opened AND closed inside a single task.
+
+    The stdio + ``ClientSession`` contexts are anyio-backed: their cancel scopes must be exited in
+    the SAME task that entered them. But the low-level MCP server dispatches every call in a child
+    task (``tg.start_soon``), so a session first opened during a ``forward`` would otherwise be torn
+    down by ``aclose()`` running in a *different* task — anyio's "cancel scope in a different task"
+    ``RuntimeError`` on shutdown. Pinning the whole open→hold→close lifecycle to one dedicated
+    ``task`` decouples it from whichever caller triggered the open: ``aclose()`` only sets ``stop``.
+    """
+
+    ready: asyncio.Event  # set once the session is usable (success) OR the open has failed
+    stop: asyncio.Event  # set by aclose() to ask the task to unwind its contexts
+    task: asyncio.Task[None] | None = None
+    session: ClientSession | None = None  # populated before ``ready`` fires on success
+    error: BaseException | None = None  # populated before ``ready`` fires on open failure
+
+
 class McpUpstreamClient:
     """Forward calls to registered upstreams over the MCP SDK, one persistent session each."""
 
     def __init__(self, specs: Sequence[UpstreamSpec], *, timeout: float = 30.0) -> None:
         self._specs = {spec.name: spec for spec in specs}
         self._timeout = timeout
-        self._stack = AsyncExitStack()
-        self._sessions: dict[str, ClientSession] = {}
+        # One dedicated lifecycle task per opened upstream (see ``_SessionRunner``).
+        self._runners: dict[str, _SessionRunner] = {}
         # Per-upstream call lock (serialize the single request/response stdio pipe) — pre-created so
         # it is never assigned *after* first use. A separate lock guards session CREATION: the MCP
         # server dispatches requests concurrently (tg.start_soon), so two first-calls to the same
@@ -111,20 +132,53 @@ class McpUpstreamClient:
         return list(self._specs)
 
     async def _session_for(self, name: str) -> ClientSession:
-        existing = self._sessions.get(name)
-        if existing is not None:
-            return existing
-        async with self._create_lock:  # double-checked: only one coroutine opens a given upstream
-            cached = self._sessions.get(name)
-            if cached is not None:
-                return cached
-            spec = self._specs[name]
-            read, write = await self._stack.enter_async_context(stdio_client(spec.stdio_params()))
-            session = await self._stack.enter_async_context(ClientSession(read, write))
-            await asyncio.wait_for(session.initialize(), self._timeout)
-            self._sessions[name] = session
-            _log.info("upstream session opened", extra={"upstream": name})
-            return session
+        runner = self._runners.get(name)
+        if runner is None:
+            async with self._create_lock:  # double-checked: one lifecycle task per upstream
+                runner = self._runners.get(name)
+                if runner is None:
+                    runner = _SessionRunner(ready=asyncio.Event(), stop=asyncio.Event())
+                    # Spawn an independent task: it owns the session's anyio cancel scopes so they
+                    # are entered AND exited in this one task, never the (child) caller's task.
+                    runner.task = asyncio.create_task(
+                        self._run_session(name, runner), name=f"gk-upstream:{name}"
+                    )
+                    self._runners[name] = runner
+        await runner.ready.wait()
+        if runner.error is not None:
+            # Open failed: drop the runner (not sticky) so a later call can relaunch, then surface
+            # the failure — forward() turns it into ok=False; _build_tool_index skips. Fail-closed.
+            async with self._create_lock:
+                if self._runners.get(name) is runner:
+                    del self._runners[name]
+            raise runner.error
+        assert runner.session is not None  # set before ``ready`` fires on the success path
+        return runner.session
+
+    async def _run_session(self, name: str, runner: _SessionRunner) -> None:
+        """Open the session, publish it, hold its contexts open until ``stop`` — all in THIS task.
+
+        Closing the stdio + ``ClientSession`` contexts here (on ``stop`` or on task cancellation
+        from ``aclose``) keeps cancel-scope enter/exit in a single task, which is what makes
+        shutdown safe no matter which task first opened the session (see ``_SessionRunner``).
+        """
+        spec = self._specs[name]
+        try:
+            async with stdio_client(spec.stdio_params()) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await asyncio.wait_for(session.initialize(), self._timeout)
+                    runner.session = session
+                    _log.info("upstream session opened", extra={"upstream": name})
+                    runner.ready.set()
+                    await runner.stop.wait()  # keep the contexts alive until gateway shutdown
+        except asyncio.CancelledError:
+            raise  # cooperative shutdown: let the contexts unwind in this task, then propagate
+        except Exception as exc:  # noqa: BLE001 — surface any open failure to the waiter (fail-closed)
+            runner.error = exc
+            _log.error("upstream session failed to open", extra={"upstream": name})
+        finally:
+            runner.session = None
+            runner.ready.set()  # never leave _session_for blocked, even on a failed open
 
     async def list_tools(self, name: str) -> list[types.Tool]:
         """List the tools a registered upstream exposes (used to build the proxy's tool surface)."""
@@ -161,7 +215,27 @@ class McpUpstreamClient:
         return ToolResult(call_id=call.call_id, ok=False, summary=f"error: {reason}", raw=raw)
 
     async def aclose(self) -> None:
-        """Close every open upstream session (called on gateway shutdown)."""
-        await self._stack.aclose()
-        self._sessions.clear()
+        """Close every open upstream session (called on gateway shutdown).
+
+        Signals each session's dedicated task to stop, then awaits it. Each task unwinds its own
+        anyio contexts in the task that opened them, so this is safe to call from any task — even
+        when a session was first opened inside a forward's child task. Best-effort: a hung teardown
+        is cancelled after ``timeout`` and shutdown never raises.
+        """
+        runners = list(self._runners.items())
+        for _name, runner in runners:
+            runner.stop.set()
+        for name, runner in runners:
+            task = runner.task
+            if task is None:
+                continue
+            try:
+                # wait_for cancels the task on timeout (injecting CancelledError, which _run_session
+                # re-raises so the contexts still unwind in-task before the task ends).
+                await asyncio.wait_for(task, self._timeout)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception:  # noqa: BLE001 — never let a teardown error break shutdown
+                _log.error("error closing upstream session", extra={"upstream": name})
+        self._runners.clear()
         self._locks.clear()

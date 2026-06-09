@@ -10,6 +10,16 @@ upstreams:
     writes: ["write_file", "delete_file"]
     reads:  ["read_file", "list_dir"]
 
+  # M1.4 proof — "govern ANY server, zero code": `time` is a REAL, third-party MCP server we did NOT
+  # write (the official `mcp-server-time`, installed via `pip install -e ".[demo]"`). It is brought
+  # under full governance — identity, RBAC, tamper-evident audit — purely by THIS config block; not a
+  # single line of src/gatekeeper/ changes. Add any other MCP server the same way.
+  - name: time
+    transport: stdio
+    command: ["python", "-m", "mcp_server_time", "--local-timezone", "UTC"]
+    reads:  ["get_current_time", "convert_time"]   # both are reads (no mutation) — config-classified
+    writes: []
+
   # - name: github
   #   transport: http
   #   url: http://localhost:9000/mcp

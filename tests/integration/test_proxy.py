@@ -9,6 +9,7 @@ chained entries, the chain verifies, writes/reads are classified, and raw args a
 from __future__ import annotations
 
 import sys
+import types as pytypes
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -27,6 +28,7 @@ from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.domain.errors import PolicyDenied
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.schemas.enums import ActionKind, Verdict
+from gatekeeper.transport.stdio_server import _build_tool_index
 
 KEY = "k" * 64
 TOKEN = "tok-alice"
@@ -143,6 +145,26 @@ async def test_live_proxy_denies_readonly_write_without_touching_upstream(
             call_id=uuid.uuid4().hex,
         )
         assert not read.ok  # the denied write never reached disk
+    finally:
+        await upstream.aclose()
+
+
+async def test_one_bad_upstream_does_not_take_down_the_gateway() -> None:
+    # M1.4 resilience: with any server registered by config, an unavailable one (here a bogus launch
+    # command) must be skipped — the healthy upstream's tools are still exposed, the gateway lives.
+    good = _demo_spec()
+    bad = UpstreamSpec(
+        name="broken",
+        transport="stdio",
+        command=(sys.executable, "-m", "gatekeeper_no_such_module_xyz"),
+    )
+    upstream = McpUpstreamClient([good, bad], timeout=30.0)
+    runtime = pytypes.SimpleNamespace(upstream=upstream)  # _build_tool_index only needs .upstream
+    try:
+        index = await _build_tool_index(runtime)  # type: ignore[arg-type]
+        # Healthy upstream fully exposed; the broken one contributes nothing (skipped, not fatal).
+        assert "read_file" in index and "write_file" in index
+        assert all(up == "demo-files" for (up, _tool) in index.values())
     finally:
         await upstream.aclose()
 

@@ -19,10 +19,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install (prod deps + dev tools) — mirrors the prod bootstrap
+      - name: Install (prod deps + demo target + dev tools) — mirrors the prod bootstrap
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          # `.[demo]` adds the real third-party MCP server (mcp-server-time) so the M1.4
+          # "govern ANY server, zero code" integration test runs for real in CI (not skipped).
+          pip install -e ".[demo]"
           pip install pytest pytest-asyncio ruff mypy types-PyYAML
       - name: Lint + format + types
         run: |
@@ -59,7 +61,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip   # keep pip current (it is itself audited)
           pip install pip-audit
-          pip install -e .
+          # `.[demo]` so the demo target's dependency (mcp-server-time + its transitive deps) is
+          # CVE-scanned too — it is installed and exercised by the quality job, so it must be audited.
+          pip install -e ".[demo]"
           # --skip-editable skips our own local package (not on PyPI). pip-audit still exits non-zero
           # on any real dependency CVE (that is independent of --strict), so the gate stays fail-closed.
           pip-audit --skip-editable

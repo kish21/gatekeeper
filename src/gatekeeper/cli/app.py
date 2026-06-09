@@ -5,13 +5,16 @@ gatekeeper serve     # run the governed gateway (MCP transport)        [/build]
 gatekeeper tail      # tail the audit ledger                           [/build]
 gatekeeper verify    # prove the hash-chained ledger is intact         [/build]
 gatekeeper show ID   # show the decision recorded for one call         [/build]
-gatekeeper seed-demo # write example config for a local demo           [/build]
+gatekeeper seed-demo # prepare the local demo + print a run recipe     [/build]
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 import typer
 from rich import box
@@ -20,7 +23,7 @@ from rich.table import Table
 
 from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
-from gatekeeper.config.loader import ConfigError, boot, get_settings, ledger_path
+from gatekeeper.config.loader import ConfigError, boot, get_settings, ledger_path, load_config
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.schemas.enums import Verdict
 
@@ -28,7 +31,17 @@ app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
 )
 _console = Console()
-_TODO = "Implemented in /build."
+
+# --- seed-demo constants ---------------------------------------------------
+#: Env var + default naming the demo_file_server sandbox. Mirrors examples/demo_file_server.py (the
+#: governed target) so the seeded dir is exactly the one that server reads/writes.
+_DEMO_SANDBOX_ENV = "DEMO_FILE_ROOT"
+_DEMO_SANDBOX_DEFAULT = "./.gatekeeper/demo_sandbox"
+_DEMO_SAMPLE_FILE = "welcome.txt"
+_DEMO_SAMPLE_TEXT = (
+    "Hello from GateKeeperAI. This file is served by the governed demo_file_server, "
+    "so `read_file welcome.txt` works the moment the gateway is up.\n"
+)
 
 
 @contextmanager
@@ -184,8 +197,80 @@ def show(call_id: str) -> None:
 
 @app.command(name="seed-demo")
 def seed_demo() -> None:
-    """Write example upstream/identity/policy config for a local demo."""
-    raise NotImplementedError(_TODO)
+    """Prepare the local demo and print a ready-to-run recipe (non-destructive).
+
+    Reads the committed config (``config/*.yaml``) to show which upstreams + identities are
+    governed, seeds the ``demo_file_server`` sandbox with a sample file (so a read works
+    immediately), and prints the exact steps to run the gateway. It deliberately does NOT overwrite
+    your config and does NOT require the HMAC key — it is a setup helper, not a governance
+    operation. Exit 0, or 2 if the config dir is missing (fail-loud).
+    """
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.seed-demo")
+    try:
+        config = load_config()  # no security guard: prep step, runnable before .env is filled in
+    except ConfigError as exc:
+        _console.print(f"[bold red][ERROR] {exc}[/]")
+        raise typer.Exit(code=2) from exc
+
+    sandbox = _seed_demo_sandbox()
+    _print_governed(config)
+    _print_demo_recipe(sandbox)
+    log.info(
+        "seed-demo ready",
+        extra={"upstreams": len(config["upstreams"]), "identities": len(config["identities"])},
+    )
+
+
+def _seed_demo_sandbox() -> Path:
+    """Create the demo sandbox + a sample file (idempotent); return the resolved path."""
+    root = Path(os.environ.get(_DEMO_SANDBOX_ENV, _DEMO_SANDBOX_DEFAULT)).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    sample = root / _DEMO_SAMPLE_FILE
+    if not sample.exists():
+        sample.write_text(_DEMO_SAMPLE_TEXT, encoding="utf-8")
+    return root
+
+
+def _print_governed(config: dict[str, Any]) -> None:
+    """Show what is governed, read back from config (reinforces 'config-driven, zero code')."""
+    upstreams = Table(title="governed upstreams (config/upstreams.yaml)", box=box.ASCII)
+    for col in ("name", "transport", "launch / url"):
+        upstreams.add_column(col)
+    for u in config["upstreams"]:
+        launch = " ".join(str(p) for p in u.get("command", [])) or str(u.get("url", "-"))
+        upstreams.add_row(str(u.get("name", "?")), str(u.get("transport", "?")), launch)
+    _console.print(upstreams)
+
+    # Identities: principal + role ONLY - the bearer token is a secret and is never printed.
+    identities = Table(
+        title="identities (config/identities.yaml - role shown, token never printed)", box=box.ASCII
+    )
+    for col in ("principal", "role"):
+        identities.add_column(col)
+    for p in config["identities"]:
+        identities.add_row(str(p.get("principal", "?")), str(p.get("role", "?")))
+    _console.print(identities)
+
+
+def _print_demo_recipe(sandbox: Path) -> None:
+    """Print the exact, ordered steps to run the governed demo."""
+    steps = Table(title="run the demo (set secrets in .env first)", box=box.ASCII)
+    steps.add_column("#")
+    steps.add_column("command")
+    steps.add_row("1", "export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)")
+    steps.add_row("2", "export GATEKEEPER_AGENT_TOKEN=<a token from config/identities.yaml>")
+    steps.add_row("3", "make migrate     # create the tamper-evident audit ledger")
+    steps.add_row("4", "make serve       # gateway as a stdio MCP server; point your agent at it")
+    steps.add_row("5", "make tail / make verify / gatekeeper show <call_id>")
+    _console.print(steps)
+    _console.print(f"demo sandbox ready: {sandbox} (sample file: {_DEMO_SAMPLE_FILE})")
+    # markup=False: the literal "[demo]" must not be parsed as a Rich style tag.
+    _console.print(
+        "Both upstreams above are governed with ZERO gateway code. The 'time' upstream is a real "
+        'third-party server; install its package to launch it: pip install -e ".[demo]"',
+        markup=False,
+    )
 
 
 if __name__ == "__main__":
