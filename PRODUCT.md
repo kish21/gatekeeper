@@ -38,10 +38,19 @@
 > off-by-one; **made the component + WAL tables reproducible** via `--diagnose`; added a logging-bias
 > caveat), security clean (no `src/`/auth/data change), docs reconciled, **PR
 > [#22](https://github.com/kish21/gatekeeper/pull/22) merged**, CI green. See `#Ship log`.
+> **`/learn` ✅ DONE (2026-06-10):** M1 cycle closed with an evidence-based retro. North-star measured
+> **good** (100% coverage / 0 bypass · RBAC 13/13 · tamper 4/4 · 0 op-failures, all CI-gated); honest
+> caveat — **no external user / live dashboard exists** (pre-deployment portfolio build), so those two
+> criteria are partial-by-construction, not skipped. **Decided-next = BUILD M2** (evidence-backed: the
+> classification→RBAC evasion gap *proves* deterministic rules are insufficient → validates the LLM
+> classifier), **vision-aligned, zero scope creep**. Harvested a generic toolkit lesson (*derive perf
+> budgets from a measured dominant-cost, never a guessed ADR number*). **Cycle confidence 82%.** See
+> `#Learnings`.
 > **⏸ M2 DELIBERATELY DEFERRED ~60 days → target ~2026-08-08 (product decision, NOT drift).** M2's
 > trigger ("M1 core proxy + ledger demoed & integrity-verified") is **met**, but the build is
-> intentionally time-boxed for later; a one-time reminder is scheduled for the target date. M1 stays
-> the shipped baseline until then. **Next phase (on resume ~Aug 2026):** **M2.1** — write/risk
+> intentionally time-boxed for later. M1 stays the shipped baseline until then. **⚠ `/learn` correction:
+> the previously-claimed one-time reminder for the target date does NOT exist** (verified: no scheduled
+> task / cron job) — re-arm it before relying on it. **Next phase (on resume ~Aug 2026):** **M2.1** — write/risk
 > classification (LLM classifier behind a provider adapter) → **M2.2** human-in-the-loop write-approval
 > gate; **first M2 slice should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) +
 > close the classification→RBAC evasion gap. Resume via `/playbook` or `/architect` for the M2 stack.
@@ -164,7 +173,8 @@ Timeline is **relative** (one slice ≈ one build session); calendar dates are n
 ### Milestone 2 — AI write-safety (committed; **deliberately deferred to ~2026-08-08**)
 > **Deferral (product decision 2026-06-09, not drift):** M1 exit + `/eval` are verified, so M2's
 > trigger is **met** — but M2 is **intentionally time-boxed ~60 days out (target ~2026-08-08)**, with
-> a one-time reminder scheduled. M1 remains the shipped baseline until then. The **first M2 slice
+> **no reminder yet armed** — it must be scheduled manually before the target (see resume marker;
+> verification found no scheduled task/cron exists). M1 remains the shipped baseline until then. The **first M2 slice
 > should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) and **close the
 > classification→RBAC evasion gap** (the LLM classifier is its backstop, ADR-005). Both are recorded
 > in `#Evaluation` / `#Build log` "Known limitations".
@@ -666,4 +676,107 @@ PR description and queued as an M2/follow-up slice, not silently dropped.)
 | 2026-06-09 | **M1 Evaluation** — reproducible governance-overhead latency harness (`tests/eval/bench_governance_latency.py` + `--diagnose`), config-driven perf budget (`platform.yaml perf.overhead_p95_ms`), and the measured `#Evaluation` (coverage 100%/0 bypass · RBAC golden 13/13 · 0 op-failures · honest latency miss p95 ~2× budget, root-caused + WAL fix quantified) | **Deep `/code-review`** (3 parallel finders + verify): fixed the nearest-rank percentile off-by-one; **made the component + WAL tables reproducible** via `--diagnose` (was measured-but-not-in-repo — a real doc-integrity finding); added the logging-suppression caveat. **Security:** **no `src/` / auth / data / permission change** (test harness + non-secret config knob + docs); secret-scan clean. **No LLM path** (M1) → OWASP-LLM N/A, deferred to M2. | ✅ `PRODUCT.md#Evaluation` + marker, CHANGELOG; README/feature docs carry no perf claim (nothing to fix) — all match the reproducible harness | `[Unreleased]` (no public-API change → no semver bump) | **Docs + test-only + additive config**; gateway runtime behavior **unchanged** (the budget knob is read only by the harness). Rollback = **revert this PR**; no migration, no flag. Signal to watch: the harness p95 vs budget after the WAL slice lands. | [#22](https://github.com/kish21/gatekeeper/pull/22) |
 
 ## Learnings
-_(unfilled — `/learn`)_
+
+**Cycle:** M1 (Governed verifiable proxy) — Vision→Ship now complete; this is the post-M1 retro.
+**Honest framing first:** GateKeeperAI is a **pre-deployment portfolio build** — there are **no external
+users yet**. So the textbook `/learn` inputs (a live analytics dashboard, real user/usage telemetry)
+**do not exist by construction**, and I will not fabricate them. The metric below is real and
+**reproducibly measured**, but it is **CI/test-gated + ledger-native**, not a production dashboard. Two
+of this skill's exit criteria (live-instrumented metric · external user signal) are therefore **honestly
+partial** — recorded with the trigger that would complete them, not checked off.
+
+### 1. Success metric + result (measured, not guessed)
+**North-star — verifiable governance coverage** (every call authenticated → policy-decided → hash-chain
+ledgered, 0 ungoverned bypass). Measured in `/eval` on the exact `main` HEAD, every number reproduced by
+a named test or the committed harness:
+| Metric | Result | Instrumented by (the standing gate) |
+|---|---|---|
+| Coverage / no-bypass | **100% / 0 bypass** | `tests/adversarial/test_proxy_governance.py` — forward unreachable except after an audited ALLOW; runs on **every push + PR** (CI merge gate) |
+| RBAC correctness | **13/13 golden** | `tests/golden/` vs the shipped `policies/gatekeeper.cedar`; CI-gated — a policy edit that drifts authz fails loudly |
+| Tamper-evidence | **4/4 attack classes detected, `seq` pinpointed** | `unit/test_hashchain.py` + `integration/test_ledger.py` + live binary |
+| Operational failures | **0 / 4,800+ harness calls + 112 tests** | full suite + `tests/eval/bench_governance_latency.py` |
+| Cost — LLM | **$0.00** | no LLM on the M1 path (`risk.enabled: false`) |
+| Cost — latency (the one **miss**) | **p95 ≈ 21.5 ms vs ~10 ms budget (~2×)** | `bench_governance_latency.py --diagnose`; config gate `platform.yaml perf.overhead_p95_ms` |
+
+**What counts as "instrumented" here (honest):** the **ledger is the per-call observability spine** (every
+call → a verifiable audit record), and the **CI gates above are the standing instrumentation** — they
+re-assert the metric on every change, which is the realistic analog of a dashboard for a pre-deployment
+tool. **Not** instrumented: a live usage dashboard / alerting — **trigger: a real deployment.**
+
+### 2. User signal (honest: no external user yet)
+No production users → no external usage signal. The closest **real** signals incorporated:
+- **Dogfood / live demo** — `seed-demo` + a **real third-party** `mcp-server-time` server governed
+  end-to-end with **zero gateway code** (M1.4). This *exercised* the north-star secondary
+  (time-to-govern config-only) rather than asserting it — the one "usage" proof that exists today.
+- **Adversarial-test usage** surfaced two genuine signals (internal, not external): the
+  **classification→RBAC evasion** gap and the **latency miss** — both fed straight into "decided next".
+- **Unmet (honest):** an external user / reviewer / buyer driving the gateway. **Trigger to generate it:**
+  a real deployment, or a portfolio reviewer running the demo against their own MCP server.
+
+### 3. Retro — what worked · what to change
+**Worked:**
+- **Docs-driven spine** (`PRODUCT.md`) kept the build honest end-to-end; thin **vertical M1 slices** each
+  landed on the **live binary path**, not just unit tests.
+- **Ledger-first resequence** (built the wedge before the proxy) de-risked the hardest/highest-value part early.
+- **Adversarial-first testing** surfaced the evasion gap and latency miss **as pinned tests**, not as
+  silent holes; the eval reported the **2× latency miss straight** (root-caused + quantified WAL fix)
+  instead of relaxing the budget — integrity held under a bad result.
+
+**To change:**
+- **Set perf budgets from a measured dominant cost, not a guessed number.** ADR-001 fixed p95 < ~10 ms
+  **before** measuring the dominant cost (2× durable fsync commits per allowed call) → missed by 2×. The
+  budget should have been derived from a quick dominant-cost probe, **or** marked explicitly *aspirational
+  + re-measure in `/eval`*. (Harvested below.)
+- **Name-pattern classification needs the semantic backstop it's already scoped for** — the evasion gap is
+  acceptable only because it's pinned by a **flip-on-fix** test; M2's LLM classifier is the real close.
+- **Don't claim a side-effect that isn't armed** — the prior resume marker stated an M2 reminder "is
+  scheduled"; verification found **no scheduled task or cron job exists**. Stated obligations must be
+  verified, not asserted (see the watch list).
+
+### 4. Decided next — from evidence (re-checked vs vision + OUT-OF-SCOPE)
+**Decision: BUILD M2, as already scoped — deliberately time-boxed to ~2026-08-08 (product decision, not drift).**
+The evidence *backs* M2 rather than merely assuming it:
+- The **classification→RBAC evasion** gap is **direct evidence** that pure deterministic name-pattern
+  classification is insufficient — which is exactly the riskiest-assumption clause ("LLM risk-scoring adds
+  enough value over pure deterministic rules"). So **M2.1 (LLM classifier behind `LLMProvider`)** is
+  **evidence-backed**, not speculative.
+- The **latency miss** dictates sequencing: the **first M2 slice lands the WAL `PRAGMA`** (quantified to
+  bring allow-path p95 **~6–7.6 ms, under budget**) + closes the evasion gap. Then M2.1 → M2.2 (HITL
+  write-approval).
+- **Vision re-check:** M2 serves the AI-write-safety differentiator + the north-star; **nothing pulled
+  from OUT-OF-SCOPE** (dashboard, SSO, multi-tenant, rate-limit all stay deferred with their triggers
+  intact). **No drift.**
+- **Kill/deprecate check:** nothing to kill — the M1 wedge is measured-good and M2 is evidence-backed.
+  Honest null result, not a rubber-stamp.
+
+**Deferred items keep their triggers** (unchanged): DPoP/mTLS → network-exposure; dashboard → non-CLI
+user; SSO → real OIDC need; multi-tenant → shared instance; etc. (see `#Scope`).
+
+### 5. Observability + cost watch (the post-M1 watch, not a one-off)
+- **Observability spine:** the hash-chained ledger (per-call verifiable audit) + structured JSON logs.
+- **Perf gate:** `bench_governance_latency.py` against `perf.overhead_p95_ms` — **re-run on the Linux/SSD
+  CI target** (M1 numbers are Windows-dev-box; eval gap #2) and **after the WAL slice** to confirm
+  p95 < 10 ms. Run-on-demand (microbenchmarks flake on shared CI), documented.
+- **Cost watch:** $0 in M1; **LLM cost monitoring begins at M2** (Claude Haiku, writes-only, cached). Set
+  a per-write cost target as an M2 exit criterion.
+- **⚠ Watch-list gap found this cycle:** the M2 trigger reminder (~2026-08-08) the marker claimed exists
+  **does not** — no scheduled task/cron. Re-arm it (offered) so M2 isn't silently forgotten past its box.
+
+### 6. Reusable learning harvested (toolkit)
+- **Graduating to the toolkit:** *"Derive a perf/cost budget from a measured dominant-cost probe — or mark
+  it explicitly aspirational and commit to re-measuring in `/eval`. Never write a hard budget number into
+  an ADR from a guess."* Generic across any product with a latency/cost target; home = the `/architect`
+  (budget-setting) + `/eval` (budget-checking) phase skills in `product-playbook`. (Patched separately.)
+- **Already captured (project memory):** the static name-pattern write-classification evasion lesson
+  (`static-write-classification-is-evadable`) — kept project-scoped; its generic core (golden
+  policy-eval dataset + flip-on-fix tests for known gaps) overlaps the above.
+- **Process fix (project-local):** verify any "scheduled/armed" claim against the actual scheduler before
+  writing it into a handoff marker.
+
+**Cycle confidence: 82%.**
+- **Solid:** north-star measured 100%/0-bypass + RBAC 13/13 + tamper 4/4 + 0 op-failures, all CI-gated;
+  next move (M2, WAL-first) is evidence-backed and vision-aligned with zero scope creep.
+- **Risky/partial (honest):** no external user signal and no live dashboard exist (pre-deployment build) —
+  structurally unmet, not skipped; the latency miss is real until WAL lands; the evasion gap is open until M2.
+- **To raise it:** get one real reviewer to drive the demo (external signal); land WAL + re-measure on
+  Linux/SSD; ship M2.1 to flip the evasion test to deny.
