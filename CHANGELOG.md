@@ -23,3 +23,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   (`append`/`read`/`get`/`verify`) and `gatekeeper verify` / `tail` CLI. `verify` detects any edit,
   deletion, reorder, insert, or wrong key and pinpoints the broken entry; it also emits the head hash
   for out-of-band pinning. Append-only + fail-closed on the HMAC key; raw args/output never stored.
+- **Transparent governed MCP proxy (M1.1):** `gatekeeper serve` — a stdio MCP proxy that re-exposes an
+  upstream's tools by name and runs every call through the pipeline (identity → classify →
+  audit-before-act → forward → audit-outcome). No ungoverned bypass; fail-closed identity; PII-safe.
+- **Identity + RBAC policy-as-code — Cedar (M1.2):** `CedarPolicyEngine` PDP at pipeline step 3
+  evaluates (role × action × tool) against version-controlled `policies/gatekeeper.cedar` →
+  allow/deny + reason; both verdicts recorded; default-deny / fail-closed eval + fail-loud policy load.
+- **Tamper-evidence gate + `show` (M1.3):** confirmed `gatekeeper verify` pinpoints any forgery on a
+  ledger now carrying RBAC allow/deny verdicts, and added **`gatekeeper show <call_id>`** to inspect
+  the recorded governance decision for one call (exit 0 found / 1 not-found / 2 misconfig; no
+  token/key leak; PII-safe).
