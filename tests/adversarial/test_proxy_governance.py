@@ -17,16 +17,22 @@ from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.db.base import Base
 from gatekeeper.db.models import LedgerEntryRow
 from gatekeeper.domain.classify import ActionClassifier
-from gatekeeper.domain.errors import IdentityError
+from gatekeeper.domain.errors import IdentityError, PolicyDenied
 from gatekeeper.gateway.pipeline import UNAUTHENTICATED_PRINCIPAL, GatewayPipeline
 from gatekeeper.schemas.enums import Verdict
 from gatekeeper.schemas.ledger import LedgerEntry, VerifyResult
 from gatekeeper.schemas.models import ToolCall, ToolResult
 
 KEY = "k" * 64
+# A real RBAC contract: operator may write, readonly may not (loaded from the shipped policy file).
+_IDENTITIES = [
+    {"token": "good", "principal": "alice", "role": "operator"},
+    {"token": "ro", "principal": "bob", "role": "readonly"},
+]
 
 
 class SpyUpstream:
@@ -67,10 +73,9 @@ def store(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
 
 def _pipeline(ledger: Any, upstream: Any) -> GatewayPipeline:
     return GatewayPipeline(
-        identity=StaticTokenResolver.from_config(
-            [{"token": "good", "principal": "alice", "role": "operator"}]
-        ),
+        identity=StaticTokenResolver.from_config(_IDENTITIES),
         classifier=ActionClassifier(name_patterns=["write*"], upstream_annotations={}),
+        policy=CedarPolicyEngine.from_config("policies"),
         ledger=ledger,
         upstream=upstream,
         hmac_key=KEY,
@@ -91,6 +96,37 @@ async def test_unauthenticated_call_is_denied_recorded_and_never_forwarded(
     assert len(recorded) == 1 and recorded[0].verdict is Verdict.DENY
     assert recorded[0].principal == UNAUTHENTICATED_PRINCIPAL
     assert store.verify().ok  # the deny is itself in the tamper-evident chain
+
+
+async def test_readonly_role_writing_is_denied_recorded_and_never_forwarded(
+    store: SqliteLedgerStore,
+) -> None:
+    # The M1.2 exit criterion: an AUTHENTICATED but UNAUTHORIZED call (readonly -> write) is
+    # blocked with a reason (fail-closed), recorded, and never reaches the upstream.
+    spy = SpyUpstream()
+    pipe = _pipeline(store, spy)
+    with pytest.raises(PolicyDenied) as excinfo:
+        await pipe.handle(
+            token="ro", upstream="demo", tool="write_file", arguments={"x": 1}, call_id="d1"
+        )
+    assert "readonly" in str(excinfo.value)  # the deny reason is actionable, not opaque
+    assert spy.calls == []  # the unauthorized write never reached the upstream
+    recorded = store.read(limit=10)
+    assert len(recorded) == 1 and recorded[0].verdict is Verdict.DENY
+    assert recorded[0].principal == "bob" and recorded[0].role == "readonly"
+    assert store.verify().ok  # the deny decision is itself in the tamper-evident chain
+
+
+async def test_readonly_role_reading_is_allowed_and_forwarded(store: SqliteLedgerStore) -> None:
+    # Same role, a READ tool -> allowed (proves the deny above is RBAC, not a blanket block).
+    spy = SpyUpstream()
+    pipe = _pipeline(store, spy)
+    result = await pipe.handle(
+        token="ro", upstream="demo", tool="read_file", arguments={"path": "a"}, call_id="d2"
+    )
+    assert result.ok and len(spy.calls) == 1  # the authorized read was forwarded
+    recorded = store.read(limit=10)
+    assert len(recorded) == 2 and all(e.verdict is Verdict.ALLOW for e in recorded)
 
 
 async def test_audit_store_failure_blocks_the_forward() -> None:

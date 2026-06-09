@@ -5,17 +5,20 @@
 
 > ### ⏯ RESUME MARKER — next session
 > **Done:** Vision…Contracts ✅ · **Build #1 ✅ — tamper-evident ledger** · **Build #2 ✅ — transparent
-> governed MCP proxy (M1.1)** (`gatekeeper serve`: identity→classify→audit-before→forward→audit-outcome;
-> live-verified E2E, 58 tests, code+security reviewed). See `#Build log` + [docs/features/proxy.md](docs/features/proxy.md).
-> **Next phase:** **`/build` — M1.2 Identity + RBAC policy-as-code.** The seams are ready: the pipeline is
-> currently **allow-all for authenticated callers** (decision is hardcoded ALLOW in `gateway/pipeline.py`
-> step 3). M1.2 inserts the **Cedar `PolicyEngine`** between identity and audit: load `policies/gatekeeper.cedar`,
-> evaluate (role × tool) → allow/deny **with reason**, fail-closed (default deny per `product.yaml`),
-> and record **both** verdicts. A `readonly` role calling a write must be **blocked + audited**; an
-> allowed call passes. Build the `adapters/policy/cedar` adapter behind the existing `ports.policy` Protocol.
-> **Dev setup:** `.venv` has full deps. Demo the proxy: `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`,
+> governed MCP proxy (M1.1)** · **Build #3 ✅ — Identity + RBAC policy-as-code / Cedar (M1.2)**
+> (`CedarPolicyEngine` PDP at pipeline step 3: role×action×tool → allow/deny+reason, fail-closed, both
+> verdicts recorded; live-verified E2E — readonly write denied+not-forwarded, 77 tests, code+security
+> reviewed). See `#Build log` + [docs/features/rbac.md](docs/features/rbac.md).
+> **Next phase:** **`/build` — M1.3 Tamper-evidence + `verify`.** Mostly already built in Build #1 (the
+> ledger is HMAC-hash-chained and `gatekeeper verify` passes on intact / pinpoints the broken seq on
+> tamper). M1.3 is the **gate that confirms it against the now-RBAC pipeline** + closes any loose ends
+> (e.g. the `gatekeeper show <call_id>` CLI is still `NotImplementedError`; `seed-demo` too). Verify the
+> exit criterion end-to-end and document, OR if M1.3 is judged complete, advance to **M1.4** (config-driven
+> 2nd server + operator CLI) — confirm scope with `/build` / `/playbook` at kickoff.
+> **Dev setup:** `.venv` has full deps. Demo: `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`,
 > `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`, `make migrate`, `gatekeeper serve` (drive with
-> an MCP client → demo_file_server), then `gatekeeper tail` / `gatekeeper verify`.
+> an MCP client → demo_file_server), then `gatekeeper tail` / `gatekeeper verify`. RBAC tokens:
+> `dev-token-bob-REPLACE-ME` = readonly (write → denied), `dev-token-root-REPLACE-ME` = admin.
 > **How to resume:** fresh session → run **`/playbook`** or **`/build`** directly.
 
 ---
@@ -364,6 +367,7 @@ contract (unknown token → raise; policy/ledger error → deny; classifier erro
 |---|---|---|---|
 | **Tamper-evident audit ledger** (keyed-HMAC hash-chain `LedgerStore`: append/read/get/verify + `verify`/`tail` CLI) | ✅ append-only · fail-closed HMAC key · detects edit/delete/reorder/insert/wrong-key · PII-safe (hash+redacted) · tenant filter · no secret in code | **Live:** migrate→append 3→`verify` OK+head (exit 0)→raw-SQL tamper→`verify` TAMPERED@seq=2 (exit 1). **Tests:** 29 (9 new) incl. tamper/delete/wrong-key. **/security-review:** no findings ≥8. **/code-review:** cleanups applied. ruff+mypy clean; `alembic check` no drift. | [docs/features/ledger.md](docs/features/ledger.md) |
 | **Transparent governed MCP proxy (M1.1)** — stdio proxy (`gatekeeper serve`) re-exposing upstream tools by original name; pipeline identity→classify→audit-before→forward→audit-outcome; `StaticTokenResolver`, `McpUpstreamClient`, `ActionClassifier`, `build_runtime` | ✅ no ungoverned bypass (forward only inside `handle`) · audit-before-act fail-closed · fail-closed identity (deny recorded, token never echoed, `serve` refuses unauth) · every call audited (`validate_input=False`) · PII-safe (args→`payload_hash`, output→status-only summary, `raw` excluded) · no secret in code | **Live (real CLI+subprocess):** `serve` ← MCP client → `demo_file_server`: list_tools(4)→write+read transparent (`live-proof`)→`tail` 4 entries→`verify` OK exit 0; unauth token & no-key → exit 2. **Tests:** 58 (28 new) unit+integration(real upstream)+adversarial(unauth/append-fail/tamper). **/code-review (high):** 6 findings fixed (session-open race, unaudited-pre-handler, output-in-ledger, double-boot, audit-drift, canonicalization). **/security-review:** no findings ≥8. ruff+mypy(strict) clean. | [docs/features/proxy.md](docs/features/proxy.md) |
+| **Identity + RBAC policy-as-code — Cedar (M1.2)** — `CedarPolicyEngine` (policy adapter) inserted as the PDP at pipeline step 3 (replaces M1.1 allow-all); evaluates (role × action × tool) against version-controlled `policies/gatekeeper.cedar` → allow/deny+reason; `PolicyDenied` error; `_build_policy` config-selected; transport surfaces deny | ✅ **authorized per role×action×tool from config (no hardcoded rule)** · readonly-write **denied+recorded+not forwarded**, allowed call passes — **both** decisions recorded · fail-closed eval (default-deny, unknown-role/NoDecision/any error → DENY) · fail-loud load (missing/empty/unparseable/zero-statement policy → refuse boot) · no policy/entity injection (structured-dict request, escaped EUIDs) · no token leak in reason/log · pipeline stays SDK-free | **Live (real composition root + CLI):** bob/readonly `write_file`→**DENY** (1 entry, no disk write), bob `list_dir`→ALLOW, alice/operator write→ALLOW (decision+outcome); `tail` verdicts, `verify` OK exit 0, `health` shows `policy=cedar`. **Tests:** 77 (19 new) — unit `test_policy` (RBAC matrix, fail-loud×4, fail-closed eval, escaping) + pipeline deny-once-not-forwarded; adversarial readonly-write-denied on **real Cedar+ledger** (verify ok); integration denied-write-leaves-no-file on **real upstream**. **/code-review (high, 2 finders):** no contract bugs; 2 hardening items taken (zero-statement load guard, eval-error log detail). **/security-review:** no findings ≥8 (9/10, verified vs live engine). ruff+mypy(strict) clean. | [docs/features/rbac.md](docs/features/rbac.md) |
 
 **Known limitations (recorded, not silent):** tail-truncation undetectable by a bare chain (mitigation:
 `verify` emits head hash to pin out-of-band; full anchoring deferred) · `get()` not tenant-scoped (safe

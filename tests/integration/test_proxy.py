@@ -20,14 +20,21 @@ from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient, UpstreamSpec
 from gatekeeper.db.base import Base
 from gatekeeper.domain.classify import ActionClassifier
+from gatekeeper.domain.errors import PolicyDenied
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.schemas.enums import ActionKind, Verdict
 
 KEY = "k" * 64
 TOKEN = "tok-alice"
+RO_TOKEN = "tok-bob"
+_IDENTITIES = [
+    {"token": TOKEN, "principal": "alice", "role": "operator"},
+    {"token": RO_TOKEN, "principal": "bob", "role": "readonly"},
+]
 ANNOTATIONS = {
     "demo-files": {"writes": ["write_file", "delete_file"], "reads": ["read_file", "list_dir"]}
 }
@@ -53,12 +60,11 @@ def ledger(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
 
 def _pipeline(ledger: SqliteLedgerStore, upstream: McpUpstreamClient) -> GatewayPipeline:
     return GatewayPipeline(
-        identity=StaticTokenResolver.from_config(
-            [{"token": TOKEN, "principal": "alice", "role": "operator"}]
-        ),
+        identity=StaticTokenResolver.from_config(_IDENTITIES),
         classifier=ActionClassifier(
             name_patterns=["write*", "delete*"], upstream_annotations=ANNOTATIONS
         ),
+        policy=CedarPolicyEngine.from_config("policies"),
         ledger=ledger,
         upstream=upstream,
         hmac_key=KEY,
@@ -102,6 +108,41 @@ async def test_live_proxy_forwards_audits_and_verifies(ledger: SqliteLedgerStore
         # PII stance: the content is never persisted in ANY entry — not as a write ARGUMENT (only
         # its payload_hash) and not in the read OUTPUT (the result_summary is status-only metadata).
         assert all("hello-gatekeeper" not in e.model_dump_json() for e in entries)
+    finally:
+        await upstream.aclose()
+
+
+async def test_live_proxy_denies_readonly_write_without_touching_upstream(
+    ledger: SqliteLedgerStore,
+) -> None:
+    # End-to-end RBAC over the real proxy path: a readonly principal's write is blocked by Cedar,
+    # recorded as a deny, and the upstream is never asked to perform it (no side effect on disk).
+    upstream = McpUpstreamClient([_demo_spec()], timeout=30.0)
+    pipe = _pipeline(ledger, upstream)
+    fname = f"forbidden-{uuid.uuid4().hex}.txt"
+    try:
+        with pytest.raises(PolicyDenied, match="readonly"):
+            await pipe.handle(
+                token=RO_TOKEN,
+                upstream="demo-files",
+                tool="write_file",
+                arguments={"path": fname, "content": "should-never-be-written"},
+                call_id=uuid.uuid4().hex,
+            )
+        entries = ledger.read(limit=10)
+        assert len(entries) == 1 and entries[0].verdict is Verdict.DENY
+        assert ledger.verify().ok
+
+        # Prove the write truly had NO effect: alice (operator) reading the same path errors
+        # because the file was never created.
+        read = await pipe.handle(
+            token=TOKEN,
+            upstream="demo-files",
+            tool="read_file",
+            arguments={"path": fname},
+            call_id=uuid.uuid4().hex,
+        )
+        assert not read.ok  # the denied write never reached disk
     finally:
         await upstream.aclose()
 
