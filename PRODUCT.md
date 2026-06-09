@@ -34,8 +34,17 @@
 > PRAGMA, queued as an M2/follow-up slice, NOT silently fixed here). New artifacts: reproducible
 > harness `tests/eval/bench_governance_latency.py` + config gate `platform.yaml perf.overhead_p95_ms`.
 > **Phase confidence 88%.** See `#Evaluation` for the full breakdown + carried gaps.
-> **Next phase:** **`/ship`** — deep review + `/security-review` + reconcile docs + PR + handoff
-> (carry the latency finding + WAL lever into the PR; then → M2).
+> **`/ship` ✅ DONE (2026-06-09):** M1 Evaluation shipped — deep `/code-review` (fixed a percentile
+> off-by-one; **made the component + WAL tables reproducible** via `--diagnose`; added a logging-bias
+> caveat), security clean (no `src/`/auth/data change), docs reconciled, **PR
+> [#22](https://github.com/kish21/gatekeeper/pull/22) merged**, CI green. See `#Ship log`.
+> **⏸ M2 DELIBERATELY DEFERRED ~60 days → target ~2026-08-08 (product decision, NOT drift).** M2's
+> trigger ("M1 core proxy + ledger demoed & integrity-verified") is **met**, but the build is
+> intentionally time-boxed for later; a one-time reminder is scheduled for the target date. M1 stays
+> the shipped baseline until then. **Next phase (on resume ~Aug 2026):** **M2.1** — write/risk
+> classification (LLM classifier behind a provider adapter) → **M2.2** human-in-the-loop write-approval
+> gate; **first M2 slice should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) +
+> close the classification→RBAC evasion gap. Resume via `/playbook` or `/architect` for the M2 stack.
 > **Dev setup:** `.venv` has full deps incl. the `demo` extra (`pip install -e ".[demo]"`). Demo:
 > `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`, `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`,
 > `make migrate`, `gatekeeper seed-demo`, `gatekeeper serve` (drive with an MCP client → demo_file_server + the
@@ -152,7 +161,14 @@ Timeline is **relative** (one slice ≈ one build session); calendar dates are n
 | **M1.4** | Config-driven any-server + operator CLI | A **second, different** MCP server is brought under governance by **editing config only (zero code)**; operator CLI can `tail` the log, run `verify`, and show the decision for a call. |
 | **M1 exit (gate)** | — | All of the above pass on the live path; `/security-review` of the decision/ledger path is clean; a fresh user can govern an arbitrary MCP server from config + docs alone. |
 
-### Milestone 2 — AI write-safety (committed; starts when M1 exit is verified)
+### Milestone 2 — AI write-safety (committed; **deliberately deferred to ~2026-08-08**)
+> **Deferral (product decision 2026-06-09, not drift):** M1 exit + `/eval` are verified, so M2's
+> trigger is **met** — but M2 is **intentionally time-boxed ~60 days out (target ~2026-08-08)**, with
+> a one-time reminder scheduled. M1 remains the shipped baseline until then. The **first M2 slice
+> should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) and **close the
+> classification→RBAC evasion gap** (the LLM classifier is its backstop, ADR-005). Both are recorded
+> in `#Evaluation` / `#Build log` "Known limitations".
+
 | # | Slice | Testable exit criterion |
 |---|---|---|
 | **M2.1** | Write/risk classification | Each call is classified read vs write and assigned a risk score (static rules + an **LLM classifier behind a provider interface**). A destructive call scores high, a read scores low; the classification + rationale are recorded in the ledger. |
