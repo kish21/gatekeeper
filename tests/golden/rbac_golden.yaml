@@ -1,0 +1,42 @@
+# rbac_golden.yaml — the GOLDEN authorization dataset.
+#
+# Known inputs -> expected verdict, evaluated against the REAL shipped policy
+# (policies/gatekeeper.cedar) by tests/golden/test_rbac_golden.py. This is the
+# regression net for policy-as-code: any edit to the .cedar contract that
+# accidentally grants or removes access fails here, with the offending case named.
+#
+# Each case is one authorization question:
+#   role     — the caller's role (the Cedar principal's Role membership)
+#   action   — the classified action_kind: read | write | unknown
+#   upstream — registered upstream name
+#   tool     — tool on that upstream  (resource = "<upstream>::<tool>")
+#   expect   — allow | deny  (the verdict the shipped policy MUST return)
+#   why      — human note (documentation only; not asserted)
+#
+# Contract under test (policies/gatekeeper.cedar):
+#   admin     -> any action on any tool
+#   operator  -> any action on any tool
+#   readonly  -> action == read ONLY (writes denied regardless of tool)
+#   default   -> deny (fail-closed): unknown role / unknown action gets nothing.
+
+cases:
+  # --- readonly: the headline RBAC contract (reads allowed, writes denied) -----
+  - { role: readonly, action: read,  upstream: demo-files, tool: read_file,   expect: allow, why: "readonly may read" }
+  - { role: readonly, action: read,  upstream: demo-files, tool: list_dir,    expect: allow, why: "readonly may read" }
+  - { role: readonly, action: write, upstream: demo-files, tool: write_file,  expect: deny,  why: "readonly may NOT write — the headline deny" }
+  - { role: readonly, action: write, upstream: demo-files, tool: delete_file, expect: deny,  why: "readonly may NOT write" }
+  - { role: readonly, action: read,  upstream: time,       tool: get_current_time, expect: allow, why: "config-classified read on a 3rd-party server" }
+
+  # --- operator: may read and write every tool ---------------------------------
+  - { role: operator, action: read,  upstream: demo-files, tool: read_file,   expect: allow, why: "operator may read" }
+  - { role: operator, action: write, upstream: demo-files, tool: write_file,  expect: allow, why: "operator may write (M2 will risk-score + approve)" }
+  - { role: operator, action: write, upstream: demo-files, tool: delete_file, expect: allow, why: "operator may write" }
+
+  # --- admin: full access ------------------------------------------------------
+  - { role: admin,    action: read,  upstream: demo-files, tool: read_file,   expect: allow, why: "admin: full access" }
+  - { role: admin,    action: write, upstream: demo-files, tool: delete_file, expect: allow, why: "admin: full access" }
+
+  # --- fail-closed: nothing a permit does not grant is allowed -----------------
+  - { role: readonly, action: unknown, upstream: demo-files, tool: mystery,    expect: deny, why: "unknown action is not 'read' -> default-deny" }
+  - { role: intern,   action: read,    upstream: demo-files, tool: read_file,  expect: deny, why: "unknown role matches no permit -> default-deny" }
+  - { role: intern,   action: write,   upstream: demo-files, tool: write_file, expect: deny, why: "unknown role -> default-deny" }
