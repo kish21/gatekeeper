@@ -4,13 +4,18 @@
 > **AI product? YES** (uses an LLM to risk-score/classify tool calls → the AI-security layer applies downstream.)
 
 > ### ⏯ RESUME MARKER — next session
-> **Done:** Vision…Contracts ✅ · **Build #1 ✅ — tamper-evident ledger** (HMAC hash-chain `LedgerStore` +
-> `verify`/`tail` CLI; live-verified, 29 tests, security+code reviewed). See `#Build log`.
-> **Next phase:** **`/build` — the MCP proxy** (next feature): a transparent pass-through that forwards a
-> tool call to a real upstream MCP server and **appends a `LedgerEntry`** via the store just built —
-> wiring identity→(policy later)→audit→forward. Then identity+RBAC (M1.2).
-> **Dev setup:** `.venv` has full deps. Demo the wedge: `GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)` then
-> `make migrate` → append (see docs/features/ledger.md) → `gatekeeper verify`.
+> **Done:** Vision…Contracts ✅ · **Build #1 ✅ — tamper-evident ledger** · **Build #2 ✅ — transparent
+> governed MCP proxy (M1.1)** (`gatekeeper serve`: identity→classify→audit-before→forward→audit-outcome;
+> live-verified E2E, 58 tests, code+security reviewed). See `#Build log` + [docs/features/proxy.md](docs/features/proxy.md).
+> **Next phase:** **`/build` — M1.2 Identity + RBAC policy-as-code.** The seams are ready: the pipeline is
+> currently **allow-all for authenticated callers** (decision is hardcoded ALLOW in `gateway/pipeline.py`
+> step 3). M1.2 inserts the **Cedar `PolicyEngine`** between identity and audit: load `policies/gatekeeper.cedar`,
+> evaluate (role × tool) → allow/deny **with reason**, fail-closed (default deny per `product.yaml`),
+> and record **both** verdicts. A `readonly` role calling a write must be **blocked + audited**; an
+> allowed call passes. Build the `adapters/policy/cedar` adapter behind the existing `ports.policy` Protocol.
+> **Dev setup:** `.venv` has full deps. Demo the proxy: `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`,
+> `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`, `make migrate`, `gatekeeper serve` (drive with
+> an MCP client → demo_file_server), then `gatekeeper tail` / `gatekeeper verify`.
 > **How to resume:** fresh session → run **`/playbook`** or **`/build`** directly.
 
 ---
@@ -358,6 +363,7 @@ contract (unknown token → raise; policy/ledger error → deny; classifier erro
 | Feature | DoD incl. security met? | How verified (evidence) | Doc |
 |---|---|---|---|
 | **Tamper-evident audit ledger** (keyed-HMAC hash-chain `LedgerStore`: append/read/get/verify + `verify`/`tail` CLI) | ✅ append-only · fail-closed HMAC key · detects edit/delete/reorder/insert/wrong-key · PII-safe (hash+redacted) · tenant filter · no secret in code | **Live:** migrate→append 3→`verify` OK+head (exit 0)→raw-SQL tamper→`verify` TAMPERED@seq=2 (exit 1). **Tests:** 29 (9 new) incl. tamper/delete/wrong-key. **/security-review:** no findings ≥8. **/code-review:** cleanups applied. ruff+mypy clean; `alembic check` no drift. | [docs/features/ledger.md](docs/features/ledger.md) |
+| **Transparent governed MCP proxy (M1.1)** — stdio proxy (`gatekeeper serve`) re-exposing upstream tools by original name; pipeline identity→classify→audit-before→forward→audit-outcome; `StaticTokenResolver`, `McpUpstreamClient`, `ActionClassifier`, `build_runtime` | ✅ no ungoverned bypass (forward only inside `handle`) · audit-before-act fail-closed · fail-closed identity (deny recorded, token never echoed, `serve` refuses unauth) · every call audited (`validate_input=False`) · PII-safe (args→`payload_hash`, output→status-only summary, `raw` excluded) · no secret in code | **Live (real CLI+subprocess):** `serve` ← MCP client → `demo_file_server`: list_tools(4)→write+read transparent (`live-proof`)→`tail` 4 entries→`verify` OK exit 0; unauth token & no-key → exit 2. **Tests:** 58 (28 new) unit+integration(real upstream)+adversarial(unauth/append-fail/tamper). **/code-review (high):** 6 findings fixed (session-open race, unaudited-pre-handler, output-in-ledger, double-boot, audit-drift, canonicalization). **/security-review:** no findings ≥8. ruff+mypy(strict) clean. | [docs/features/proxy.md](docs/features/proxy.md) |
 
 **Known limitations (recorded, not silent):** tail-truncation undetectable by a bare chain (mitigation:
 `verify` emits head hash to pin out-of-band; full anchoring deferred) · `get()` not tenant-scoped (safe

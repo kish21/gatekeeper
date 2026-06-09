@@ -39,12 +39,25 @@ class ToolCall(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """Result of forwarding a call to an upstream (upstream -> gateway)."""
+    """Result of forwarding a call to an upstream (upstream -> gateway).
+
+    ``summary`` is the only result data that reaches the ledger (redacted/truncated). ``raw`` holds
+    the untouched upstream payload for TRANSPARENT RELAY back to the agent only — it is ``exclude``d
+    from every serialization, so it can never leak into a log or the audit chain (PII stance).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     call_id: str
     ok: bool
     summary: str = Field(
         default="", description="Short, redacted/truncated status — NOT raw output."
+    )
+    raw: Any = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Opaque upstream payload for transparent relay ONLY; never persisted/audited.",
     )
 
 
