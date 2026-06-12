@@ -17,6 +17,8 @@ without un-audited bypass). ``summary`` is redacted/truncated — raw output is 
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +26,7 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 
+from gatekeeper.config.loader import ConfigError
 from gatekeeper.infra.logging import get_logger
 from gatekeeper.schemas.models import ToolCall, ToolResult
 
@@ -31,6 +34,54 @@ _log = get_logger("gatekeeper.upstream")
 
 #: Max chars of an upstream result kept in the audit summary (raw output is never persisted).
 _SUMMARY_MAX = 200
+
+#: In ``config/upstreams.yaml`` an env value may be a literal, OR ``{from_env: NAME}`` — a reference
+#: whose VALUE is read from the process environment / ``.env`` at launch. Keeping only the NAME in
+#: YAML upholds the project rule "secrets never live in YAML, only their names" (config/loader.py)
+#: for an upstream's own credentials (e.g. a GitHub server's token) too.
+_ENV_REF_KEY = "from_env"
+
+
+def _resolve_env_value(upstream: str, key: str, value: object, source: Mapping[str, str]) -> str:
+    """Resolve one upstream env entry to its final string value.
+
+    A literal scalar passes through unchanged (backward compatible). A ``{from_env: NAME}`` mapping
+    is replaced by ``source[NAME]`` (the live env / ``.env``). Fail-closed: a referenced-but-unset
+    secret raises ``ConfigError`` so a half-configured credential aborts startup, rather than
+    silently launching the server without it — or leaking the literal ``{...}`` placeholder as the
+    credential. The resolved value is passed straight to the subprocess; it is never logged or
+    persisted to the audit ledger.
+    """
+    if isinstance(value, Mapping):
+        name = value.get(_ENV_REF_KEY)
+        if set(value) != {_ENV_REF_KEY} or not isinstance(name, str) or not name:
+            raise ConfigError(
+                f"upstream {upstream!r} env {key!r}: expected a literal value or "
+                f"{{{_ENV_REF_KEY}: NAME}}, got {value!r}."
+            )
+        try:
+            return source[name]
+        except KeyError:
+            raise ConfigError(
+                f"upstream {upstream!r} env {key!r}: secret {name!r} (referenced via "
+                f"'{_ENV_REF_KEY}') is not set. Put it in .env — never in config/upstreams.yaml. "
+                "Refusing to start (fail-closed)."
+            ) from None
+    return str(value)
+
+
+def _resolve_launcher(command: str) -> str:
+    """Resolve a stdio upstream's launcher command.
+
+    A bare ``python``/``python3`` resolves via PATH, which under an MCP host (Claude Desktop, an
+    IDE, cron) may not be the interpreter GateKeeper itself runs in — so a config-declared
+    ``python -m your_server`` upstream would fail to import its package. Pin those to THIS
+    interpreter (``sys.executable``) so such an upstream launches reliably regardless of the host's
+    PATH or venv activation. Any other launcher (``npx``, a full path, a binary) is used verbatim.
+    """
+    if command in ("python", "python3"):
+        return sys.executable
+    return command
 
 
 @dataclass(frozen=True)
@@ -44,13 +95,28 @@ class UpstreamSpec:
     cwd: str | None = None
 
     @classmethod
-    def from_config(cls, raw: Mapping[str, Any]) -> UpstreamSpec:
-        env = raw.get("env")
+    def from_config(
+        cls, raw: Mapping[str, Any], *, secret_source: Mapping[str, str] | None = None
+    ) -> UpstreamSpec:
+        """Build a spec from one ``config/upstreams.yaml`` entry.
+
+        Each ``env`` value is a literal, or a ``{from_env: NAME}`` secret reference resolved against
+        ``secret_source`` (defaults to the live process env). Injecting the source keeps resolution
+        testable without mutating real env vars.
+        """
+        source = os.environ if secret_source is None else secret_source
+        name = str(raw["name"])
+        raw_env = raw.get("env")
+        env = (
+            {str(k): _resolve_env_value(name, str(k), v, source) for k, v in raw_env.items()}
+            if raw_env
+            else None
+        )
         return cls(
-            name=str(raw["name"]),
+            name=name,
             transport=str(raw.get("transport", "stdio")),
             command=tuple(str(part) for part in raw.get("command", [])),
-            env={str(k): str(v) for k, v in env.items()} if env else None,
+            env=env,
             cwd=str(raw["cwd"]) if raw.get("cwd") else None,
         )
 
@@ -63,7 +129,7 @@ class UpstreamSpec:
         if not self.command:
             raise ValueError(f"upstream {self.name!r}: stdio transport needs a 'command'.")
         return StdioServerParameters(
-            command=self.command[0],
+            command=_resolve_launcher(self.command[0]),
             args=list(self.command[1:]),
             env=dict(self.env) if self.env else None,
             cwd=self.cwd,
@@ -124,9 +190,16 @@ class McpUpstreamClient:
 
     @classmethod
     def from_config(
-        cls, upstreams: Sequence[Mapping[str, Any]], *, timeout: float = 30.0
+        cls,
+        upstreams: Sequence[Mapping[str, Any]],
+        *,
+        timeout: float = 30.0,
+        secret_source: Mapping[str, str] | None = None,
     ) -> McpUpstreamClient:
-        return cls([UpstreamSpec.from_config(u) for u in upstreams], timeout=timeout)
+        return cls(
+            [UpstreamSpec.from_config(u, secret_source=secret_source) for u in upstreams],
+            timeout=timeout,
+        )
 
     def upstream_names(self) -> list[str]:
         return list(self._specs)

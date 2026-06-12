@@ -11,12 +11,19 @@ still be safe on its own.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("demo-files")
+
+# FastMCP's constructor runs ``logging.basicConfig(INFO)``, which makes the low-level MCP server
+# log a "Processing request of type …" line per call to stderr. That is internal protocol chatter,
+# not something a demo audience (or the test output) needs — quiet it so the governance story is the
+# only thing on screen. Behaviour is unchanged; only this server's request-logging verbosity drops.
+logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
 
 #: Env var naming the sandbox root (no hardcoded absolute path).
 _ROOT_ENV = "DEMO_FILE_ROOT"

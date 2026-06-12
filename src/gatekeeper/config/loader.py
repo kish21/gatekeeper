@@ -14,11 +14,13 @@ is what makes the audit ledger tamper-evident (ADR-003). A silent insecure boot 
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import dotenv_values
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,10 +29,15 @@ class ConfigError(RuntimeError):
     """Raised when configuration is missing, unparseable, or insecure. Boot must abort."""
 
 
+#: The .env file every secret is read from (gateway secrets via Settings; upstream credential
+#: references via ``secret_source``). One source of truth for the path.
+ENV_FILE = ".env"
+
+
 class Settings(BaseSettings):
     """Secrets and environment-level overrides (read from ``.env`` / real env)."""
 
-    model_config = SettingsConfigDict(env_prefix="GATEKEEPER_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="GATEKEEPER_", env_file=ENV_FILE, extra="ignore")
 
     hmac_key: str = Field(
         default="", description="Keyed-HMAC key for the audit hash-chain (ADR-003)."
@@ -75,6 +82,18 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+def secret_source() -> dict[str, str]:
+    """Lookup table for upstream credential references (``{from_env: NAME}`` in upstreams.yaml).
+
+    Values come from ``.env`` (so a secret stays out of ``config/upstreams.yaml`` — only its NAME is
+    in YAML), overlaid by real process environment variables — an exported var wins over ``.env``,
+    the conventional precedence, so prod can inject secrets via the deployment environment. A
+    missing ``.env`` simply yields the process environment. Resolved values are never logged.
+    """
+    file_values = {k: v for k, v in dotenv_values(ENV_FILE).items() if v is not None}
+    return {**file_values, **os.environ}
 
 
 def load_config(settings: Settings | None = None) -> dict[str, Any]:

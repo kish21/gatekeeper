@@ -20,6 +20,14 @@ upstreams:
     reads:  ["get_current_time", "convert_time"]   # both are reads (no mutation) — config-classified
     writes: []
 
+  # Example: a real GitHub MCP server that needs a credential. Secrets are referenced by NAME via
+  # `{ from_env: VAR }` — the VALUE is read from .env / the process env at launch and is NEVER stored
+  # in this file (the project rule: secrets live in .env, only their names appear in YAML). A
+  # referenced-but-unset secret is fail-closed (the gateway refuses to start with a clear error).
   # - name: github
-  #   transport: http
-  #   url: http://localhost:9000/mcp
+  #   transport: stdio
+  #   command: ["npx", "-y", "@modelcontextprotocol/server-github"]
+  #   env:
+  #     GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # put GITHUB_TOKEN=ghp_... in .env
+  #   reads:  ["search_repositories", "get_file_contents", "list_issues"]
+  #   writes: ["create_issue", "merge_pull_request", "delete_branch"]

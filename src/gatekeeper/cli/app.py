@@ -31,6 +31,9 @@ app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
 )
 _console = Console()
+#: Errors/diagnostics go here. For `serve`, stdout is the MCP JSON-RPC channel — any human text on
+#: it corrupts the protocol (an MCP host reports "not valid JSON"), so failures must use stderr.
+_err_console = Console(stderr=True)
 
 # --- seed-demo constants ---------------------------------------------------
 #: Env var + default naming the demo_file_server sandbox. Mirrors examples/demo_file_server.py (the
@@ -112,7 +115,8 @@ def serve() -> None:
     try:
         anyio.run(serve_stdio)
     except (ConfigError, IdentityError) as exc:
-        _console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
+        # stderr, NOT stdout: stdout is the MCP protocol channel here (see _err_console).
+        _err_console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
         raise typer.Exit(code=2) from exc
 
 

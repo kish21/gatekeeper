@@ -35,6 +35,22 @@ control or failing an audit.
   no record was altered, inserted, or removed.
 - **Tool-agnostic** — govern any MCP server by editing `config/upstreams.yaml`. Zero code per server.
 
+## See it in 30 seconds
+
+To **watch** governance happen — without wiring up an agent — run the narrated demo. It plays the
+whole story on your terminal against the real pipeline and a real upstream subprocess (hermetic:
+an ephemeral key + a throwaway ledger in a temp dir, removed on exit — nothing to set up, nothing
+touched):
+
+```bash
+make demo            # or: python -m scripts.demo
+```
+
+You'll see an operator's read **allowed**, a read-only user's write **denied by Cedar policy**, a
+real third-party server (`mcp-server-time`) governed with zero code, the hash-chained audit ledger
+**verify clean**, and then a deliberate tamper **caught** — the wedge: *don't trust the gateway,
+verify it.*
+
 ## Quickstart
 
 GateKeeperAI is a **stdio MCP server your agent connects to**. The repo ships with a working demo
@@ -78,6 +94,19 @@ pip install -e ".[demo]"           # adds the real third-party MCP server (mcp-s
 
 To govern *your own* MCP server, add a block to `config/upstreams.yaml` (name, transport, command) —
 that's the entire integration. One unavailable upstream is logged and skipped, never fatal.
+
+**Servers that need a credential** (e.g. a GitHub server's token) reference it by **name**, so the
+secret value stays in `.env` and never lands in YAML — fail-closed if it's unset:
+
+```yaml
+  - name: github
+    transport: stdio
+    command: ["npx", "-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # value read from .env at launch, not stored here
+    reads:  ["search_repositories", "get_file_contents", "list_issues"]
+    writes: ["create_issue", "merge_pull_request", "delete_branch"]
+```
 
 > **Not an external service:** `serve` runs entirely local (gateway → local upstreams). No network
 > call leaves your machine and no LLM/API key is involved in M1 — that arrives with M2 risk-scoring.
