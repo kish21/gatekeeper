@@ -64,6 +64,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 - **Non-technical product explainer:** `docs/HOW-IT-WORKS.md` (guard/badge mental model, who-is-the
   agent, config-not-code, deploy story, credentialed-server onboarding) + presentation-ready
   `docs/how-it-works.svg`; README "See it in 30 seconds" section.
+- **M3 "Enterprise deployment readiness" cycle (docs):** kicked off from fired, pre-documented
+  triggers (anonymized enterprise platform-requirements spec, 2026-06) — `PRODUCT.md` scope + plan
+  tables for M3.1–M3.5 (#26) — and the **M3.1 HTTP-transport architecture decisions** (ADR-007
+  single-worker serving preserves the ledger's single-writer assumption by construction; ADR-008
+  authn enforced + recorded in the pipeline with per-request bearer extraction in transport; ADR-009
+  fail-closed loopback-by-default bind) in the `#Architecture` M3.1 addendum (#27). Docs-only; the
+  HTTP transport itself lands with the M3.1 build.
 
 ### Changed
 - CI now installs the `demo` extra in both the test job (so the "govern any server" proof runs for
