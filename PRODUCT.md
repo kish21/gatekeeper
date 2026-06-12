@@ -65,8 +65,16 @@
 > connector-onboarding runbook. **M2 unchanged** (same scope, ~2026-08-08 box, reminder ARMED — see
 > above). Cloud posture: agnostic core, Azure-first proof. See `#Learnings` Decided-next amendment,
 > `#Scope` M3 table (quoted triggers), `#Plan` M3 slice table.
-> **How to resume (next session): run `/architect` for M3.1 — HTTP transport** (FastAPI/uvicorn are
-> already deps; `build_pipeline()` in `gateway/factory.py` is transport-agnostic by design). One slice
+> **`/architect` M3.1 ✅ DONE (2026-06-12, docs-only):** HTTP-transport decisions recorded in
+> `#Architecture` → *M3.1 addendum* — MCP **Streamable HTTP** via the official SDK, mounted in a
+> **FastAPI + uvicorn single-worker** app (`/mcp` + `/healthz`); per-request `Authorization: Bearer`
+> resolved + recorded **in the pipeline**, not the transport (ADR-008); **single worker = ledger
+> single-writer held by construction** (ADR-007); **loopback-by-default, refuse non-loopback bind
+> without explicit config ack** (ADR-009); ADR-006 re-evaluated → still deferred (loopback). New config
+> knobs only (`transport.http_path/http_allow_non_loopback/http_allowed_origins`); no new adapter, no
+> migration, no new secret. Aspirational +<~5 ms p95 transport overhead → re-measure in `/eval`.
+> **How to resume (next session): run `/build` for M3.1 — HTTP transport** (decisions above; shared
+> proxy-surface builder refactor out of `stdio_server.py`; exit criterion in `#Plan` M3 table). One slice
 > per session: each via `/architect` → `/build` → `/ship`; `/security-review` on M3.1/M3.2 (auth surface).
 > **Dev setup:** `.venv` has full deps incl. the `demo` extra (`pip install -e ".[demo]"`). Demo:
 > `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`, `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`,
@@ -315,6 +323,74 @@ SQLite ledger schema via **Alembic** (never hand-edit schema). Cedar policies + 
 - **Prompt versioning:** risk-classifier prompt in `prompts/risk_classifier.yaml`, versioned.
 - **Eval harness:** labeled `(tool call → expected risk)` set incl. **adversarial / prompt-injection** cases; optimize for **recall on destructive** calls (a false-negative is the dangerous failure). Run in `/eval`.
 - **Tracing:** every LLM call traced (input hash, model, score, latency, cost) **into the same audit ledger** — so the AI's own decisions are auditable and verifiable.
+
+### M3.1 — HTTP transport decisions (added 2026-06-12, `/architect`)
+**Slice goal (from `#Plan`):** an agent governs calls **over HTTP (loopback)** through the **same**
+pipeline; stdio unchanged; calls over both transports recorded + `verify`-clean; the ADR-006
+network-exposure trigger documented *and enforced* at the boundary.
+
+| Decision | Choice | Why (one line) |
+|---|---|---|
+| Wire protocol | **MCP Streamable HTTP** via the official SDK's `StreamableHTTPSessionManager` (`mcp` 1.27.2 — already a dep, verified installed) | The current MCP spec transport (the older SSE transport is deprecated); same rule as stdio — never reinvent JSON-RPC framing. |
+| ASGI host | **FastAPI app + Uvicorn, single worker** — MCP mounted at a config-driven path (default `/mcp`), plus a `/healthz` liveness route | Both already deps and already the documented stack-table row; `/healthz` feeds M3.3 container probes; the M2 approval API + M3.4 observability endpoints get a natural home. |
+| Identity over HTTP | `Authorization: Bearer <token>` per **request** — transport extracts it via the SDK request context (`RequestContext.request`, verified present in 1.27.2); the **pipeline** resolves + records it | Transport stays logic-free (the PEP stays `GatewayPipeline`); identity-deny stays a ledger entry; **multi-principal on one gateway** becomes possible (new vs stdio's one-token-per-process). |
+| Exposure posture | **Loopback by default; refuse a non-loopback bind** without an explicit config ack; SDK DNS-rebinding protection (`TransportSecuritySettings` allowed-hosts/origins) on | Fail-closed: bearer tokens are replayable (ADR-006) — the exposure trigger is enforced in code, not just documented. |
+| Sessions | SDK defaults (stateful; streaming responses) | No fired trigger for stateless/json-response mode; both stay config-addable later with no interface change. |
+
+**New ADRs (load-bearing):**
+- **ADR-007 — Single-worker serving preserves the ledger's single-writer assumption *by construction*.**
+  `SqliteLedgerStore.append` is a **sync** read-prev-hash → insert (verified in code) with a documented
+  single-writer assumption; HTTP introduces concurrent sessions for the first time. Under **one** uvicorn
+  worker/event loop a sync append contains no `await`, so two appends can never interleave — the hash
+  chain cannot race, with **no new lock layer**. Enforced: `serve` exposes no `workers` knob; M3.3
+  deploys **1 replica** (record it there). *Rejected:* asyncio/DB locking + multi-worker (complexity with
+  no fired scale trigger; the real answer at that trigger is the deferred Postgres ledger). *Trade-off
+  carried, not silent:* the sync durable-commit blocks the event loop (the measured ~21.5 ms p95 from
+  `/eval`); the WAL `PRAGMA` fix stays queued for the first M2 slice.
+- **ADR-008 — Authn enforcement lives in the pipeline; the transport only extracts credentials.**
+  A `tools/call` with a missing/invalid bearer still reaches `pipeline.handle`, which **records the
+  identity-deny in the ledger, then refuses** (identical to the stdio per-call path) — never a silent
+  transport-level 401 for a tool call, so "every call accounted for" holds over HTTP. The non-call
+  surface (initialize / `tools/list`) resolves the token **fail-closed** so an unauthenticated client
+  cannot enumerate tools. This per-request seam is exactly where OIDC (M3.2) and DPoP/mTLS (ADR-006)
+  later drop in with **no pipeline change**. *Rejected:* validating tokens in ASGI middleware (moves
+  authz logic into transport and loses the ledger record for denied tool calls).
+- **ADR-009 — Fail-closed network exposure.** Default bind `127.0.0.1:8765` (already in
+  `platform.yaml`); a non-loopback `transport.http_host` **refuses boot** unless
+  `transport.http_allow_non_loopback: true` is set explicitly, which logs the ADR-006 bearer-replay
+  warning. TLS is **not** implemented in-process — it terminates at the cloud ingress in M3.3.
+  *Rejected:* silently binding `0.0.0.0` (fail-open) · in-process TLS now (no trigger; cert plumbing
+  belongs to the deploy slice).
+- **ADR-006 re-evaluated at this slice (as the `#Learnings` amendment requires):** still **deferred** —
+  M3.1 is loopback-only by ADR-009, so the "exposed beyond a trusted local/loopback boundary" clause has
+  **not** fired yet; it comes into actual view at M3.2 (real OIDC) / M3.3 (hosted), where it must be
+  re-evaluated again.
+
+**Config (no hardcoding):** reuses `transport.{mode,http_host,http_port}` (already present in
+`platform.yaml`); adds `transport.http_path` (default `/mcp`), `transport.http_allow_non_loopback`
+(default `false`), `transport.http_allowed_origins` (default none ⇒ rebinding protection stays active).
+CLI: `gatekeeper serve` reads `transport.mode`; `--transport stdio|http` is an explicit per-invocation
+override. **No new secrets** (the bearer arrives in a request header; nothing token-shaped lands in YAML
+or code).
+
+**Adapters / externals:** **none new** — HTTP is a second *inbound* binding of the same low-level MCP
+`Server`; stdio and HTTP share one proxy-surface builder (tool index + list/call handlers, refactored
+out of `stdio_server.py` into a shared module) so governance behavior cannot drift between transports.
+Resilience: uvicorn lifespan shutdown → `runtime.aclose()` (same teardown as stdio); per-upstream
+timeouts/retries unchanged; the SDK's `session_idle_timeout` stays available as a config knob if needed.
+
+**Perf budget (derived, not guessed):** the governance-overhead budget is **unchanged** (identical
+pipeline; `perf.overhead_p95_ms: 10`, with the known fsync miss carried). New and **explicitly
+aspirational** (no probe run this docs session — per the harvested budget rule): HTTP transport adds
+**< ~5 ms p95 over stdio on loopback** (ASGI dispatch + localhost hop) — **re-measure in `/eval`**
+with the existing `bench_governance_latency.py` pattern before treating it as fact.
+
+**Patterns / anti-patterns (this slice):** applied — same chain-of-responsibility PEP behind a second
+thin transport binding; shared surface-builder (don't repeat the proxy surface). Avoided — authz-in-
+transport (god transport) · fail-open bind · reinventing protocol framing · premature horizontal
+scaling (multi-worker with a single-writer ledger would be a correctness bug dressed as scalability).
+
+**Migrations:** N/A (no schema change). **AI specifics:** N/A (no LLM path in this slice).
 
 ## Structure
 
