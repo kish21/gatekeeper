@@ -50,10 +50,24 @@
 > trigger ("M1 core proxy + ledger demoed & integrity-verified") is **met**, but the build is
 > intentionally time-boxed for later. M1 stays the shipped baseline until then. **⚠ `/learn` correction:
 > the previously-claimed one-time reminder for the target date does NOT exist** (verified: no scheduled
-> task / cron job) — re-arm it before relying on it. **Next phase (on resume ~Aug 2026):** **M2.1** — write/risk
+> task / cron job) — re-arm it before relying on it. **→ RE-ARMED ✅ 2026-06-12:** one-time scheduled
+> task `gatekeeper-m2-resume-reminder` fires 2026-08-08 09:00 — **verified present + enabled in the
+> scheduler itself**, not just noted. **Next phase (on resume ~Aug 2026):** **M2.1** — write/risk
 > classification (LLM classifier behind a provider adapter) → **M2.2** human-in-the-loop write-approval
 > gate; **first M2 slice should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) +
 > close the classification→RBAC evasion gap. Resume via `/playbook` or `/architect` for the M2 stack.
+> **🚀 M3 CYCLE KICKED OFF (2026-06-12, docs-only session):** new market evidence — an **anonymized
+> enterprise platform-requirements specification (2026-06)** for exactly this product category — fired
+> triggers this file already documented (`#Scope` SSO/OIDC · `#Plan` infra/deploy · the unfinished M1
+> "stdio + **HTTP**" transport item) → **Milestone 3 "Enterprise deployment readiness" inserted before
+> M2's box**: **M3.1** HTTP transport → **M3.2** OIDC identity (generic adapter, Entra-first) →
+> **M3.3** container + Azure-first hosted deploy → **M3.4** observability surface → **M3.5**
+> connector-onboarding runbook. **M2 unchanged** (same scope, ~2026-08-08 box, reminder ARMED — see
+> above). Cloud posture: agnostic core, Azure-first proof. See `#Learnings` Decided-next amendment,
+> `#Scope` M3 table (quoted triggers), `#Plan` M3 slice table.
+> **How to resume (next session): run `/architect` for M3.1 — HTTP transport** (FastAPI/uvicorn are
+> already deps; `build_pipeline()` in `gateway/factory.py` is transport-agnostic by design). One slice
+> per session: each via `/architect` → `/build` → `/ship`; `/security-review` on M3.1/M3.2 (auth surface).
 > **Dev setup:** `.venv` has full deps incl. the `demo` extra (`pip install -e ".[demo]"`). Demo:
 > `export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)`, `export GATEKEEPER_AGENT_TOKEN=dev-token-alice-REPLACE-ME`,
 > `make migrate`, `gatekeeper seed-demo`, `gatekeeper serve` (drive with an MCP client → demo_file_server + the
@@ -137,11 +151,26 @@ identity-checked → RBAC-decided (allow/deny via policy-as-code) → forwarded 
 | Human-in-the-loop **write-approval gate** (approve/deny queue) | …require a human OK before risky/write calls execute | same |
 > This is the standout AI differentiator and is **part of the locked product scope** — not deferred indefinitely. Its trigger is internal (core done), not an external signal.
 
+**In-scope — Milestone 3 "Enterprise deployment readiness" (pulled in 2026-06-12 — triggers FIRED, quoted per row; builds NOW, before M2's ~2026-08-08 box)**
+> **Evidence:** an **anonymized enterprise platform-requirements specification (2026-06)** for exactly
+> this product category — governed MCP orchestration with enterprise identity, hosted deployment,
+> observability, and connector onboarding. Items move out of Deferred **only because their own
+> pre-documented triggers fired** (the anti-drift rule), not because they became appealing.
+> Full reasoning: `#Learnings` → Decided-next amendment (2026-06-12).
+
+| In-scope item (M3) | Customer outcome (security engineer can…) | Fired trigger (quoted from this file) |
+|---|---|---|
+| **HTTP transport** (M3.1) | …point a network-reachable agent at the gateway and get the identical governed pipeline | Not a pull — *"Transparent MCP proxy (stdio + HTTP transport)"* is **already in-scope M1**; only stdio was built, so this finishes unfinished scope |
+| **OIDC identity adapter** (M3.2 — generic OIDC behind the existing `IdentityResolver` port; Entra ID proven first) | …plug in the company IdP: real tokens → principal + role via a configured group→role map, no static dev tokens | Deferred row *"SSO / OIDC identity integration — Trigger: A real deployment needs enterprise identity (replaces token→role stub)"* → **FIRED** by the 2026-06 enterprise platform requirements |
+| **Container + hosted cloud deploy** (M3.3 — cloud-neutral container; Azure-first proof) | …run the gateway as a hosted control plane: secrets via environment, ledger on persistent storage | `#Plan` checklist *"Infra / deploy … Trigger: a real hosted deployment"* → **FIRED** (same evidence; deployment subscription available) |
+| **Observability surface** (M3.4) | …see live platform health: calls, allow/deny rates, governance-overhead p95 vs budget, one alert hook | `#Learnings` watch item *"**Not** instrumented: a live usage dashboard / alerting — **trigger: a real deployment**"* → fired by M3.3 itself |
+| **Connector-onboarding runbook + 3rd real credentialed connector** (M3.5) | …onboard a credentialed third-party MCP server from the runbook alone — config + `.env` only | Serves the locked north-star secondary (*"time-to-govern a new MCP server = config-only, < a few minutes, zero code"*) at enterprise grade, proven on a ServiceNow-class connector |
+
 **Deferred (real external trigger required to pull in)**
 | Deferred item | Trigger that would justify it |
 |---|---|
 | Web dashboard / approval UI (vs CLI) | A user/reviewer can't operate via CLI, or the approval flow needs non-engineers |
-| SSO / OIDC identity integration | A real deployment needs enterprise identity (replaces token→role stub) |
+| ~~SSO / OIDC identity integration~~ → **moved to in-scope M3.2 (2026-06-12)** | Trigger *"A real deployment needs enterprise identity (replaces token→role stub)"* → **FIRED** by the anonymized enterprise platform requirements (2026-06); see In-scope M3 above |
 | **Sender-constrained tokens (DPoP / mTLS)** behind `IdentityResolver` — defeats stolen-bearer-token replay (see ADR-006) | The gateway is exposed **beyond a trusted local/loopback boundary** (network-reachable), **or** real OIDC identity lands — i.e. when bearer-token replay becomes a realistic threat |
 | Multi-tenant / org isolation | More than one team/tenant shares one gateway instance |
 | Rate limiting / cost budgets | An agent-runaway or cost-overrun incident is observed |
@@ -170,11 +199,33 @@ Timeline is **relative** (one slice ≈ one build session); calendar dates are n
 | **M1.4** | Config-driven any-server + operator CLI | A **second, different** MCP server is brought under governance by **editing config only (zero code)**; operator CLI can `tail` the log, run `verify`, and show the decision for a call. |
 | **M1 exit (gate)** | — | All of the above pass on the live path; `/security-review` of the decision/ledger path is clean; a fresh user can govern an arbitrary MCP server from config + docs alone. |
 
+### Milestone 3 — Enterprise deployment readiness (inserted 2026-06-12; **builds NOW, before M2's box**)
+> **Why out of number order:** M2 was scoped and committed first and keeps its number and its
+> ~2026-08-08 time box (deliberate, unchanged). M3 was pulled in on 2026-06-12 by **fired,
+> pre-documented triggers** — an anonymized enterprise platform-requirements spec (2026-06); each
+> trigger is quoted in the `#Scope` M3 table, full reasoning in the `#Learnings` Decided-next
+> amendment — and it is the enterprise platform layer *underneath* M2's approval feature, so it is
+> built first. **Cloud posture: agnostic core, Azure-first proof** (generic OIDC adapter + standard
+> container run anywhere; Azure is where it is deployed/proven first; a GCP deploy guide is an
+> optional follow-up slice, no code change). Stack choices (MSAL vs PyJWT+JWKS, Container Apps vs
+> AKS, dashboard tech) are **deliberately deferred to each slice's `/architect` step** —
+> benchmarked-2026, OSS-first, per the playbook. One slice ≈ one build session.
+
+| # | Slice | Testable exit criterion ("done when…") |
+|---|---|---|
+| **M3.1** | **HTTP transport** (finish the M1 in-scope item; FastAPI/uvicorn already deps) | An agent governs calls **over HTTP** (loopback) through the **same** pipeline; stdio unchanged; calls over both transports recorded + `verify`-clean. ADR-006 note: the network-exposure trigger for sender-constrained tokens is documented at the boundary. |
+| **M3.2** | **OIDC identity adapter** (generic OIDC behind the existing `IdentityResolver` port — `ports/identity.py` unchanged; Entra ID proven first) | A real Entra-issued token (JWKS signature, audience, expiry validated) resolves to principal + role via a configured group→role map; expired/forged token **fail-closed**; `adapters.identity: oidc` is a pure config swap; `static_token` stays the dev default. |
+| **M3.3** | **Containerize + first cloud deploy** (cloud-neutral container; Azure-first proof) | Dockerfile + deploy guide; gateway runs on Azure (Container Apps), ledger on persistent storage; a local agent makes a governed call against the **cloud** gateway; `verify` clean; secrets via environment, none in image/config. GCP guide = optional follow-up slice, no code change. |
+| **M3.4** | **Observability surface** | An operator can see live platform health: calls, allow/deny rates, governance-overhead p95 vs the 10 ms budget; one alert hook (e.g. on verify-failure / deny-spike). |
+| **M3.5** | **Connector-onboarding runbook + 3rd real connector** | A fresh operator onboards a **credentialed** third-party MCP server (ServiceNow-class) from the runbook alone — config + `.env` only; runbook includes a service-mapping + SLA template for reuse. |
+| **M3 exit (gate)** | — | A network agent authenticates via a real IdP token to a **hosted** gateway; its calls are governed + `verify`-clean end-to-end; platform health is observable; a fresh operator can onboard a credentialed connector from docs alone. `/security-review` clean on the identity + transport slices (auth surface). |
+
 ### Milestone 2 — AI write-safety (committed; **deliberately deferred to ~2026-08-08**)
 > **Deferral (product decision 2026-06-09, not drift):** M1 exit + `/eval` are verified, so M2's
-> trigger is **met** — but M2 is **intentionally time-boxed ~60 days out (target ~2026-08-08)**, with
-> **no reminder yet armed** — it must be scheduled manually before the target (see resume marker;
-> verification found no scheduled task/cron exists). M1 remains the shipped baseline until then. The **first M2 slice
+> trigger is **met** — but M2 is **intentionally time-boxed ~60 days out (target ~2026-08-08)**.
+> **Reminder ARMED 2026-06-12** (one-time scheduled task `gatekeeper-m2-resume-reminder`, fires
+> 2026-08-08 09:00 — verified in the scheduler; the earlier finding that none existed is closed).
+> M1 remains the shipped baseline until then; **M3 (above) builds in the meantime**. The **first M2 slice
 > should also land the WAL ledger PRAGMA** (closes the `/eval` latency miss) and **close the
 > classification→RBAC evasion gap** (the LLM classifier is its backstop, ADR-005). Both are recorded
 > in `#Evaluation` / `#Build log` "Known limitations".
@@ -186,17 +237,19 @@ Timeline is **relative** (one slice ≈ one build session); calendar dates are n
 | **M2 exit (gate)** | — | A write call demonstrably blocks until a human approves; classifier evaluated for accuracy + prompt-injection resistance; full chain still `verify`-clean. |
 
 ### Out-of-scope (referenced, NOT scheduled — pull in only on trigger)
-Web dashboard, SSO/OIDC, multi-tenant, rate-limit/budgets, policy-editor UI, extra transports — triggers in `#Scope`.
+Web dashboard/approval UI, multi-tenant, rate-limit/budgets, policy-editor UI, transports beyond
+stdio+HTTP — triggers in `#Scope`. *(SSO/OIDC and infra/deploy left this list on 2026-06-12 — their
+documented triggers **fired**; see Milestone 3 above.)*
 
 ### Concern-area coverage checklist (production-readiness)
 | Area | When | Note / trigger |
 |---|---|---|
 | **Security** | **NOW** | This *is* a security product: authN, RBAC, fail-closed, tamper-evident audit are core. `/security-review` on the decision+ledger path is an M1 gate. |
 | **AI-specific** | **NEXT (M2)** | LLM risk classifier behind a provider adapter; prompt-injection resistance + classifier eval. Trigger: M2 start. |
-| **Observability** | **NOW** | Structured logging + the audit ledger IS the observability spine; every call traced end-to-end. |
+| **Observability** | **NOW** | Structured logging + the audit ledger IS the observability spine; every call traced end-to-end. **M3.4 (added 2026-06-12)** layers the live operator health surface on top (calls, allow/deny rates, p95 vs budget, alert hook). |
 | **Developer-experience** | **NOW** | Config-driven, CLI, drop-in proxy — directly serves the north-star secondary (time-to-govern a new server). |
 | **Testing** | **NOW** | Unit (policy engine, hash-chain), integration (real upstream MCP server), adversarial (tamper attempts, RBAC bypass, no-bypass paths). |
-| **Infra / deploy** | **LATER** | Local + CI now; containerize/multi-tenant deferred. Trigger: a real hosted deployment. |
+| **Infra / deploy** | **M3 (trigger FIRED 2026-06-12)** | Was LATER with trigger *"a real hosted deployment"* — fired by the 2026-06 enterprise platform requirements → containerize + Azure-first hosted deploy = **M3.3**. Multi-tenant stays deferred (its own trigger unfired). |
 | **Documentation** | **NOW** | Docs-driven & portfolio-first: README, architecture doc, policy reference kept in sync each phase. |
 | **Product** | **NOW** | Vision/scope locked; `/drift-check` before each milestone. |
 
@@ -751,6 +804,41 @@ The evidence *backs* M2 rather than merely assuming it:
 
 **Deferred items keep their triggers** (unchanged): DPoP/mTLS → network-exposure; dashboard → non-CLI
 user; SSO → real OIDC need; multi-tenant → shared instance; etc. (see `#Scope`).
+*(Superseded in part by the 2026-06-12 amendment below — the SSO/OIDC and infra/deploy triggers have
+since FIRED; the rest keep their triggers.)*
+
+#### Amendment (2026-06-12) — new market evidence → insert Milestone 3 before M2's box
+- **Evidence:** an **anonymized enterprise platform-requirements specification (2026-06)** describing
+  exactly this product category — a governed MCP orchestration layer (RBAC, tamper-evident audit,
+  approval workflows, connector architecture, enterprise identity/OIDC, hosted cloud deployment,
+  observability) — analyzed as market evidence. It is the first concrete external demand signal this
+  product has had, and it validates the `#Vision` buyer (the platform/security engineer) verbatim.
+- **The triggers it fires are ones this file already documents** (the anti-drift test: pull a deferred
+  item in only when *its own* recorded trigger fires — not because it became appealing):
+  1. `#Scope` Deferred — *"SSO / OIDC identity integration — Trigger: A real deployment needs
+     enterprise identity (replaces token→role stub)"* → **FIRED**.
+  2. `#Plan` concern checklist — *"Infra / deploy … Trigger: a real hosted deployment"* → **FIRED**
+     (the requirements are deployment-shaped and Azure-centric; a deployment subscription is available).
+  3. `#Scope` M1 in-scope row reads *"Transparent MCP proxy (stdio + **HTTP** transport)"* but only
+     **stdio** was built → **unfinished in-scope work**, not a new pull — M3 finishes it.
+  4. The same evidence demands live operational visibility → completes the `§5` watch item *"Not
+     instrumented: a live usage dashboard / alerting — trigger: a real deployment."*
+- **Decision: insert Milestone 3 — "Enterprise deployment readiness" — and build it NOW, before M2's
+  box.** Slices: **M3.1** HTTP transport · **M3.2** OIDC identity (generic adapter, Entra ID proven
+  first) · **M3.3** container + Azure-first hosted deploy · **M3.4** observability surface ·
+  **M3.5** connector-onboarding runbook + 3rd credentialed connector. **M2 is untouched** — same
+  scope, same ~2026-08-08 box; M3 is the enterprise platform layer *underneath* M2's approval feature.
+- **Cloud posture: agnostic core, Azure-first proof.** The code stays cloud-neutral by construction
+  (generic OIDC adapter works with Entra/Okta/Google; a standard container runs anywhere); Azure is
+  only where it is *deployed and proven first*, because the market evidence is Azure-centric and a
+  subscription is on hand. A GCP deploy guide is an optional cheap follow-up, not a redesign.
+- **Vision re-check (no drift):** M3 *deploys* the verifiable-governance gateway; it changes nothing
+  about the wedge. Dashboard/approval UI, multi-tenant, rate-limiting, policy-editor UI **stay
+  deferred** — their triggers have not fired. DPoP/mTLS (ADR-006) stays deferred too, but **both of
+  its trigger clauses come into view during M3** (network exposure → M3.1/M3.3; real OIDC → M3.2) —
+  re-evaluate it explicitly at each of those slices' `/architect` steps.
+- Where the change landed: `#Scope` (items moved with their quoted fired triggers) · `#Plan`
+  (M3 slice table with testable exit criteria) · resume marker (next session = `/architect` M3.1).
 
 ### 5. Observability + cost watch (the post-M1 watch, not a one-off)
 - **Observability spine:** the hash-chained ledger (per-call verifiable audit) + structured JSON logs.
@@ -761,6 +849,9 @@ user; SSO → real OIDC need; multi-tenant → shared instance; etc. (see `#Scop
   a per-write cost target as an M2 exit criterion.
 - **⚠ Watch-list gap found this cycle:** the M2 trigger reminder (~2026-08-08) the marker claimed exists
   **does not** — no scheduled task/cron. Re-arm it (offered) so M2 isn't silently forgotten past its box.
+  **→ CLOSED 2026-06-12:** one-time scheduled task `gatekeeper-m2-resume-reminder` armed, fires
+  2026-08-08 09:00 — verified against the scheduler itself (listed, enabled, `nextRunAt` set), per the
+  process fix below ("verify any scheduled/armed claim against the actual scheduler").
 
 ### 6. Reusable learning harvested (toolkit)
 - **Graduating to the toolkit:** *"Derive a perf/cost budget from a measured dominant-cost probe — or mark
@@ -780,3 +871,11 @@ user; SSO → real OIDC need; multi-tenant → shared instance; etc. (see `#Scop
   structurally unmet, not skipped; the latency miss is real until WAL lands; the evasion gap is open until M2.
 - **To raise it:** get one real reviewer to drive the demo (external signal); land WAL + re-measure on
   Linux/SSD; ship M2.1 to flip the evasion test to deny.
+
+## Drift log
+
+> Cross-cutting `/drift-check` findings — dated rows on **confirmed** drift only (a check, not a phase).
+
+| Date | Drift found | Type | Resolution |
+|---|---|---|---|
+| 2026-06-12 | Commit `b0957ee` (`feat/showcase-upstream-secrets-host-fixes`: narrated demo `scripts/demo.py` + runner `.bat`s, `docs/HOW-IT-WORKS.md`, **`.env` upstream secret injection `{from_env}`**, MCP-client/serve hardening, +24 tests → 127) exists in the repo but has **no `#Build log` / `#Ship log` row** — the spine is one commit behind the code. **Not scope creep**: each piece serves documented in-scope items (operator/demo surface, config-driven upstream registration; secrets referenced via env per the non-goal — never stored), and the branch's PR is not yet opened. | Code↔docs (build log stale vs code) | **Record, don't cut:** add the `#Build log` + `#Ship log` rows as part of opening that branch's PR (already queued). This row makes the gap deliberate, not silent. |
