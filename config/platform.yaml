@@ -2,9 +2,12 @@
 # Business/product knobs live in product.yaml. Secrets live in .env (never here).
 
 transport:
-  mode: stdio            # stdio | http
+  mode: stdio            # stdio | http  (gatekeeper serve --transport overrides per invocation)
   http_host: 127.0.0.1   # trust-local default (see ADR-006: bearer tokens, loopback only)
   http_port: 8765
+  http_path: /mcp        # where the MCP Streamable HTTP surface is mounted
+  http_allow_non_loopback: false   # ADR-009: a non-loopback bind REFUSES boot unless acked here
+  http_allowed_origins: []         # ADR-009: Origin allowlist (empty = cross-site requests refused)
 
 # Which concrete adapter implements each port (ports & adapters / ADR-004).
 # Swap an implementation here without touching business logic.

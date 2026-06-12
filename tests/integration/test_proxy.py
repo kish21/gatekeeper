@@ -28,7 +28,7 @@ from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.domain.errors import PolicyDenied
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.schemas.enums import ActionKind, Verdict
-from gatekeeper.transport.stdio_server import _build_tool_index
+from gatekeeper.transport.surface import build_tool_index
 
 KEY = "k" * 64
 TOKEN = "tok-alice"
@@ -161,7 +161,7 @@ async def test_one_bad_upstream_does_not_take_down_the_gateway() -> None:
     upstream = McpUpstreamClient([good, bad], timeout=30.0)
     runtime = pytypes.SimpleNamespace(upstream=upstream)  # _build_tool_index only needs .upstream
     try:
-        index = await _build_tool_index(runtime)  # type: ignore[arg-type]
+        index = await build_tool_index(runtime)  # type: ignore[arg-type]
         # Healthy upstream fully exposed; the broken one contributes nothing (skipped, not fatal).
         assert "read_file" in index and "write_file" in index
         assert all(up == "demo-files" for (up, _tool) in index.values())

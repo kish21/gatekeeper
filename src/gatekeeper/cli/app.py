@@ -102,18 +102,32 @@ def health() -> None:
 
 
 @app.command()
-def serve() -> None:
-    """Run the governed gateway (transparent stdio MCP proxy) over stdio.
+def serve(
+    transport: str | None = typer.Option(
+        None,
+        "--transport",
+        help="stdio | http. Default: transport.mode in platform.yaml.",
+    ),
+) -> None:
+    """Run the governed gateway (transparent MCP proxy) over stdio or Streamable HTTP.
 
-    Exit 2 on misconfig (no HMAC key / no ledger table) or an unauthenticated agent token.
+    Exit 2 on misconfig (no HMAC key / no ledger table / non-loopback HTTP bind without the
+    ADR-009 ack) or, for stdio, an unauthenticated agent token.
     """
     import anyio
 
     from gatekeeper.domain.errors import IdentityError
+    from gatekeeper.transport.http_server import serve_http
     from gatekeeper.transport.stdio_server import serve_stdio
 
     try:
-        anyio.run(serve_stdio)
+        mode = transport or str(load_config()["platform"].get("transport", {}).get("mode", "stdio"))
+        if mode == "stdio":
+            anyio.run(serve_stdio)
+        elif mode == "http":
+            anyio.run(serve_http)
+        else:  # fail-loud: an unknown transport is a misconfig, not a silent default
+            raise ConfigError(f"unknown transport {mode!r} (expected stdio | http)")
     except (ConfigError, IdentityError) as exc:
         # stderr, NOT stdout: stdout is the MCP protocol channel here (see _err_console).
         _err_console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
