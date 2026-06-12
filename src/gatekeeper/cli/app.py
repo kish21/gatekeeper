@@ -11,6 +11,7 @@ gatekeeper seed-demo # prepare the local demo + print a run recipe     [/build]
 from __future__ import annotations
 
 import os
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -102,18 +103,32 @@ def health() -> None:
 
 
 @app.command()
-def serve() -> None:
-    """Run the governed gateway (transparent stdio MCP proxy) over stdio.
+def serve(
+    transport: str | None = typer.Option(
+        None,
+        "--transport",
+        help="stdio | http. Default: transport.mode in platform.yaml.",
+    ),
+) -> None:
+    """Run the governed gateway (transparent MCP proxy) over stdio or Streamable HTTP.
 
-    Exit 2 on misconfig (no HMAC key / no ledger table) or an unauthenticated agent token.
+    Exit 2 on misconfig (no HMAC key / no ledger table / non-loopback HTTP bind without the
+    ADR-009 ack) or, for stdio, an unauthenticated agent token.
     """
     import anyio
 
     from gatekeeper.domain.errors import IdentityError
+    from gatekeeper.transport.http_server import serve_http
     from gatekeeper.transport.stdio_server import serve_stdio
 
     try:
-        anyio.run(serve_stdio)
+        mode = transport or str(load_config()["platform"].get("transport", {}).get("mode", "stdio"))
+        if mode == "stdio":
+            anyio.run(serve_stdio)
+        elif mode == "http":
+            anyio.run(serve_http)
+        else:  # fail-loud: an unknown transport is a misconfig, not a silent default
+            raise ConfigError(f"unknown transport {mode!r} (expected stdio | http)")
     except (ConfigError, IdentityError) as exc:
         # stderr, NOT stdout: stdout is the MCP protocol channel here (see _err_console).
         _err_console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
@@ -157,6 +172,14 @@ def verify() -> None:
         f"(verified {result.checked} before the break)"
     )
     log.error("verify failed", extra={"broken_at": result.broken_at, "detail": result.detail})
+    # M3.4 alert hook: a tampered ledger is THE signal this product exists for — page someone.
+    # Fail-safe (never raises, exit code stays 1) and off when no webhook is configured.
+    from gatekeeper.infra.alerts import WebhookAlerter
+
+    WebhookAlerter(get_settings().alert_webhook).fire(
+        "verify_failure",
+        {"broken_at": result.broken_at, "detail": result.detail, "checked": result.checked},
+    )
     raise typer.Exit(code=1)
 
 
@@ -197,6 +220,50 @@ def show(call_id: str) -> None:
     table.add_row("entry_hash", entry.entry_hash or "-")
     _console.print(table)
     _console.print("Run `gatekeeper verify` to confirm the chain that contains this entry.")
+
+
+@app.command()
+def stats(limit: int = 1000) -> None:
+    """Platform-health snapshot from the audit ledger (M3.4 operator surface).
+
+    Calls, allow/deny counts and rates, denies by principal, and busiest tools — derived from
+    the last ``limit`` ledger entries (decision entries only, so a call is counted once).
+    Live process metrics (overhead p95 vs budget) are on the HTTP transport's ``/metrics``.
+    """
+    configure_logging(get_settings().log_level)
+    with _opened_ledger() as store:
+        entries = store.read(limit=limit)
+    # A call yields a decision entry and (when allowed+forwarded) an outcome entry that repeats
+    # the verdict. Count each call_id once — its decision — so rates mean "of all calls".
+    decisions: dict[str, Any] = {}
+    for e in entries:  # read() returns newest-first; keep the OLDEST entry per call (decision)
+        decisions[e.call_id] = e
+    calls = list(decisions.values())
+    if not calls:
+        _console.print("(ledger is empty)")
+        return
+    allows = [e for e in calls if e.verdict is Verdict.ALLOW]
+    denies = [e for e in calls if e.verdict is Verdict.DENY]
+
+    table = Table(title=f"platform health - last {len(calls)} calls", box=box.ASCII)
+    table.add_column("metric")
+    table.add_column("value")
+    table.add_row("calls", str(len(calls)))
+    table.add_row("allowed", f"{len(allows)} ({len(allows) / len(calls):.0%})")
+    table.add_row("denied", f"{len(denies)} ({len(denies) / len(calls):.0%})")
+    deny_by_principal = Counter(e.principal for e in denies)
+    table.add_row(
+        "denies by principal",
+        ", ".join(f"{p}={n}" for p, n in deny_by_principal.most_common(5)) or "-",
+    )
+    top_tools = Counter(f"{e.upstream}:{e.tool}" for e in calls)
+    table.add_row("busiest tools", ", ".join(f"{t}={n}" for t, n in top_tools.most_common(5)))
+    table.add_row("window", f"{calls[-1].ts} .. {calls[0].ts}")
+    _console.print(table)
+    _console.print(
+        "Live process metrics (overhead p95 vs budget): GET /metrics on the HTTP transport. "
+        "Run `gatekeeper verify` to prove this history is untampered."
+    )
 
 
 @app.command(name="seed-demo")

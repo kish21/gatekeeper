@@ -25,7 +25,7 @@ jobs:
           # `.[demo]` adds the real third-party MCP server (mcp-server-time) so the M1.4
           # "govern ANY server, zero code" integration test runs for real in CI (not skipped).
           pip install -e ".[demo]"
-          pip install pytest pytest-asyncio ruff mypy types-PyYAML
+          pip install pytest pytest-asyncio pytest-timeout ruff mypy types-PyYAML
       - name: Lint + format + types
         run: |
           ruff check .
@@ -41,6 +41,25 @@ jobs:
           python -m build --wheel
           pip install dist/*.whl --force-reinstall
           GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper health
+
+  container:
+    name: container build · healthz smoke (M3.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the image
+        run: docker build -t gatekeeper:ci .
+      - name: Boot + liveness smoke (migrate -> serve -> /healthz)
+        run: |
+          docker run -d --name gk -p 8765:8765 \
+            -e GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/healthz; then ok=1; break; fi; sleep 1;
+          done
+          docker logs gk
+          [ "${ok:-0}" = "1" ]   # fail the job if /healthz never came up
+      - name: Ledger migrated + verify runs inside the container
+        run: docker exec gk gatekeeper verify
 
   security:
     name: secret-scan · dep-vuln (fail-closed)

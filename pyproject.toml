@@ -23,6 +23,7 @@ dependencies = [
   "sqlalchemy>=2.0.50",       # ledger persistence
   "alembic>=1.18.4",       # DB migrations (never hand-edit schema)
   "cedarpy",             # Cedar policy engine (policy-as-code, analyzable)
+  "PyJWT[crypto]>=2.13.0",   # OIDC identity adapter (M3.2): JWKS signature/aud/exp validation
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,8 @@ dev = [
   "pytest>=9.0.3",
   "pytest-asyncio>=1.4.0",
   "pytest-cov>=7.1.0",
+  "pytest-timeout>=2.3.1",   # a hung async test must FAIL with stacks, never wedge CI
+
   "ruff>=0.15.16",
   "mypy>=2.1.0",
   "types-PyYAML",
@@ -79,3 +82,7 @@ packages = ["gatekeeper"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Fail-loud on a wedged test (dumps all stacks). "thread" method: signal-based does not work on
+# Windows; generous budget — the slowest legit test (real subprocess upstream) is well under it.
+timeout = 120
+timeout_method = "thread"

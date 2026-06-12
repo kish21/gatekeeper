@@ -2,18 +2,39 @@
 # Business/product knobs live in product.yaml. Secrets live in .env (never here).
 
 transport:
-  mode: stdio            # stdio | http
+  mode: stdio            # stdio | http  (gatekeeper serve --transport overrides per invocation)
   http_host: 127.0.0.1   # trust-local default (see ADR-006: bearer tokens, loopback only)
   http_port: 8765
+  http_path: /mcp        # where the MCP Streamable HTTP surface is mounted
+  http_allow_non_loopback: false   # ADR-009: a non-loopback bind REFUSES boot unless acked here
+  http_allowed_origins: []         # ADR-009: Origin allowlist (empty = cross-site requests refused)
+  http_allowed_hosts: []           # extra Host values for /mcp (hosted FQDN, e.g. "gw.example.com:*")
 
 # Which concrete adapter implements each port (ports & adapters / ADR-004).
 # Swap an implementation here without touching business logic.
 adapters:
-  identity: static_token   # static_token (M1) | oidc (deferred)
+  identity: static_token   # static_token (dev default) | oidc (M3.2 — see identity.oidc below)
   policy: cedar            # cedar
   ledger: sqlite           # sqlite (M1) | postgres (deferred)
   upstream: mcp_client     # mcp_client
   llm: claude              # claude | openai | stub  (M2 only)
+
+# M3.2 — OIDC identity (used ONLY when adapters.identity: oidc). Generic across IdPs; the
+# commented values show the Entra ID shape. No secret here: tokens arrive per request and are
+# validated against the IdP's PUBLIC JWKS keys.
+# identity:
+#   oidc:
+#     issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
+#     audience: <the gateway app's client-id or api://… identifier URI>
+#     group_role_map:                 # IdP group (Entra: group OBJECT id) -> gateway role;
+#       <group-object-id>: operator   #   map order ranks roles, first match wins;
+#       <group-object-id>: readonly   #   unmapped groups -> DENY (fail-closed)
+#     jwks_url: …                     # optional; default = OIDC discovery on the issuer
+#     principal_claim: sub            # Entra alternatives: oid, preferred_username
+#     groups_claim: groups
+#     algorithms: [RS256]             # asymmetric only; HS*/none are never accepted
+#     leeway_s: 0
+#     jwks_lifespan_s: 900
 
 ledger:
   path: ./.gatekeeper/audit.db
@@ -30,6 +51,12 @@ resilience:
 logging:
   level: INFO
   format: json             # structured logs for SIEM ingestion
+
+# M3.4 — operator observability. The /metrics route (HTTP transport) renders Prometheus text;
+# `gatekeeper stats` reads the ledger. The alert webhook URL lives in .env
+# (GATEKEEPER_ALERT_WEBHOOK — may embed a token); unset = alerting off.
+observability:
+  deny_spike: { window_s: 60, threshold: 10 }   # one alert per breach episode (re-arms on drain)
 
 # Performance budget — the added gateway overhead over a direct upstream call
 # (classify + Cedar eval + keyed-HMAC + SQLite append, EXCLUDING upstream I/O).

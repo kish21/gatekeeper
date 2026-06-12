@@ -1,0 +1,48 @@
+# platform.yaml — CONTAINER overlay (baked over config/platform.yaml in the image).
+# Delta vs the repo default, every line deliberate:
+#   * transport http on 0.0.0.0 WITH the explicit ADR-009 ack — inside a container the
+#     "interface" is the container's own namespace; real exposure is decided by the platform
+#     ingress, which also terminates TLS (never in-process, ADR-009).
+#   * ledger on /data — the persistent volume (Azure Files in the M3.3 guide).
+# Secrets still come ONLY from the environment (GATEKEEPER_HMAC_KEY, {from_env} refs).
+#
+# DRIFT WARNING: this file REPLACES config/platform.yaml wholesale in the image (simple COPY,
+# no merge). A knob added to config/platform.yaml later must be mirrored here or the container
+# silently runs its built-in default — when editing config/platform.yaml, diff it against this
+# file. (Recorded maintenance hazard; a merge/overlay mechanism is deliberately NOT built until
+# the duplication actually bites.)
+
+transport:
+  mode: http
+  http_host: 0.0.0.0
+  http_port: 8765
+  http_path: /mcp
+  http_allow_non_loopback: true    # ADR-009 ack: containerized; TLS + exposure at the ingress
+  http_allowed_origins: []         # browser cross-site requests stay refused
+  http_allowed_hosts: []           # ADD your public FQDN here when hosted: ["<fqdn>:*"]
+                                   # (without it, /mcp refuses unknown Host headers with 421)
+
+adapters:
+  identity: static_token   # swap to oidc for a real IdP (see docs/features/oidc-identity.md)
+  policy: cedar
+  ledger: sqlite
+  upstream: mcp_client
+  llm: claude
+
+ledger:
+  path: /data/audit.db     # persistent volume — the ledger must outlive the replica
+  hash_algo: hmac-sha256
+
+policy:
+  dir: ./policies
+
+resilience:
+  upstream: { timeout: 30, retries: 2, retry_on: transient, breaker_threshold: 5 }
+  llm:      { timeout: 8,  retries: 1, retry_on: transient }
+
+logging:
+  level: INFO
+  format: json
+
+perf:
+  overhead_p95_ms: 10.0

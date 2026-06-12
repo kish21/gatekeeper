@@ -6,6 +6,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 ## [Unreleased]
 
 ### Added
+- **HTTP transport (M3.1):** MCP Streamable HTTP binding of the same governed pipeline —
+  shared proxy-surface builder (stdio/HTTP cannot drift), FastAPI+uvicorn single worker
+  (ADR-007), per-request `Authorization: Bearer` resolved + recorded in the pipeline
+  (ADR-008), fail-closed non-loopback bind guard + DNS-rebinding protection (ADR-009),
+  `gatekeeper serve --transport stdio|http`, `/healthz`.
+- **OIDC identity adapter (M3.2):** generic PyJWT+JWKS `IdentityResolver` (Entra-first docs):
+  signature/issuer/audience/expiry validated, config group→role map, fail-closed on every path;
+  `adapters.identity: oidc` is a pure config swap.
+- **Container + Azure deploy (M3.3):** multi-stage non-root Dockerfile (migrate→seed→serve),
+  container config overlay (/data ledger volume), CI container build+healthz smoke job, and the
+  Azure Container Apps deploy guide (1 replica pinned per ADR-007).
+- **Observability surface (M3.4):** `GET /metrics` (Prometheus text: calls by verdict, deny
+  rate, governance-overhead p95 vs budget), `gatekeeper stats` (ledger-derived health), and a
+  fail-safe webhook alert hook (verify-failure + deny-spike) via `GATEKEEPER_ALERT_WEBHOOK`.
 - Product definition (`PRODUCT.md`): vision, scope, plan, architecture (ADR-001…006).
 - Project structure + root scaffolding: src-layout package skeleton, layered ports-&-adapters
   folders, config engine (`config/*.yaml` + typed loader), secret-scan, pre-commit, Makefile, `STRUCTURE.md`.
