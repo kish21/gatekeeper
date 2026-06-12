@@ -158,6 +158,13 @@ async def test_http_calls_run_the_same_pipeline_and_verify_clean(
         async with httpx.AsyncClient() as http:
             health = await http.get(f"{base}/healthz")
             assert health.status_code == 200 and health.json() == {"status": "ok"}
+            # /metrics (M3.4): live counters + overhead p95 vs budget, aggregates only —
+            # no principal, tool argument, or token may appear.
+            metrics = (await http.get(f"{base}/metrics")).text
+            assert 'gatekeeper_calls_total{verdict="allow"}' in metrics
+            assert "gatekeeper_overhead_p95_ms" in metrics
+            assert "gatekeeper_overhead_budget_ms" in metrics
+            assert "alice" not in metrics and TOKEN not in metrics
 
     # Every HTTP call was LEDGERED through the identical pipeline and the chain verifies.
     assert ledger.verify().ok

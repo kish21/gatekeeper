@@ -28,11 +28,13 @@ from fastapi import FastAPI
 from mcp.server.lowlevel.server import request_ctx
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
 from gatekeeper.config.loader import ConfigError, get_settings, load_config
 from gatekeeper.gateway.factory import GatewayRuntime, build_runtime
 from gatekeeper.infra.logging import configure_logging, get_logger
+from gatekeeper.infra.metrics import GatewayMetrics, default_metrics
 from gatekeeper.transport.surface import build_proxy_server, build_tool_index
 
 if TYPE_CHECKING:
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8765
 _DEFAULT_PATH = "/mcp"
+_DEFAULT_BUDGET_MS = 10.0  # perf.overhead_p95_ms fallback (ADR-001 budget)
 
 #: Host-header values always acceptable on a loopback bind (any port — the bind is the guard).
 _LOOPBACK_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
@@ -58,6 +61,9 @@ def http_transport_config(config: dict[str, Any]) -> dict[str, Any]:
         "path": str(transport.get("http_path", _DEFAULT_PATH)),
         "allow_non_loopback": bool(transport.get("http_allow_non_loopback", False)),
         "allowed_origins": [str(o) for o in transport.get("http_allowed_origins", []) or []],
+        # Extra Host-header values for the /mcp DNS-rebinding check (e.g. the public FQDN of a
+        # hosted deployment: "gw.example.com:*"). Loopback hosts are always allowed.
+        "allowed_hosts": [str(h) for h in transport.get("http_allowed_hosts", []) or []],
     }
 
 
@@ -126,6 +132,8 @@ def create_app(
     path: str = _DEFAULT_PATH,
     allowed_hosts: list[str] | None = None,
     allowed_origins: list[str] | None = None,
+    metrics: GatewayMetrics | None = None,
+    overhead_budget_ms: float = _DEFAULT_BUDGET_MS,
 ) -> FastAPI:
     """Assemble the FastAPI app: the MCP surface at ``path`` + a ``/healthz`` liveness route.
 
@@ -139,7 +147,16 @@ def create_app(
         allowed_origins=list(allowed_origins or []),
     )
     server = build_proxy_server(runtime, index, extract_bearer_token)
-    manager = StreamableHTTPSessionManager(app=server, security_settings=security)
+    # json_response=True (recorded deviation from the "SDK defaults" line in the M3.1 addendum):
+    # the governed proxy is strict request/response — a call returns ONE complete, already-
+    # relayed upstream result; nothing is server-pushed mid-call. The SSE streaming mode showed
+    # a flaky lost-response race under load (initialize reply dropped between the SSE write and
+    # the client reader; reproduced + diagnosed via task-stack dumps this session), while plain
+    # JSON responses are deterministic. SSE/resumability can return as a config knob when a
+    # feature actually needs server push.
+    manager = StreamableHTTPSessionManager(
+        app=server, security_settings=security, json_response=True
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -161,6 +178,16 @@ def create_app(
         # deliberately empty of config/state — it leaks nothing about the governed surface.
         return {"status": "ok"}
 
+    live_metrics = metrics if metrics is not None else default_metrics
+
+    @app.get("/metrics")
+    async def _metrics() -> PlainTextResponse:
+        # M3.4 operator surface: Prometheus text exposition (curl-able AND scrapeable).
+        # Aggregates only — counts, rates, overhead p95 vs budget; no principals, tools,
+        # arguments, or tokens, so liveness-level exposure is acceptable on the loopback/ingress
+        # posture (the per-call record stays in the authz-governed ledger).
+        return PlainTextResponse(live_metrics.prometheus_text(budget_ms=overhead_budget_ms))
+
     return app
 
 
@@ -171,7 +198,8 @@ async def serve_http() -> None:
 
     runtime = build_runtime()  # fail-closed HMAC key + fail-loud (ledger table must exist)
     try:
-        cfg = http_transport_config(load_config())
+        config = load_config()
+        cfg = http_transport_config(config)
         ensure_exposure_acked(cfg["host"], allow_non_loopback=cfg["allow_non_loopback"])
         non_loopback = not _is_loopback(cfg["host"])
         if non_loopback:
@@ -196,9 +224,13 @@ async def serve_http() -> None:
             runtime,
             index,
             path=cfg["path"],
-            # On an acked non-loopback bind, the configured host becomes a valid Host header.
-            allowed_hosts=[f"{cfg['host']}:*"] if non_loopback else None,
+            # On an acked non-loopback bind, the configured bind host is also a valid Host
+            # header; a hosted deployment adds its public FQDN via http_allowed_hosts.
+            allowed_hosts=cfg["allowed_hosts"] + ([f"{cfg['host']}:*"] if non_loopback else []),
             allowed_origins=cfg["allowed_origins"],
+            overhead_budget_ms=float(
+                config["platform"].get("perf", {}).get("overhead_p95_ms", _DEFAULT_BUDGET_MS)
+            ),
         )
         # Single worker BY CONSTRUCTION (ADR-007): the programmatic uvicorn.Server is one
         # process/one event loop; no `workers` knob exists on this path. log_config=None keeps

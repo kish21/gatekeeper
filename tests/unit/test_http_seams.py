@@ -87,6 +87,7 @@ def test_http_transport_config_defaults_and_overrides() -> None:
         "path": "/mcp",
         "allow_non_loopback": False,
         "allowed_origins": [],
+        "allowed_hosts": [],
     }
     cfg = http_transport_config(
         {
@@ -97,6 +98,7 @@ def test_http_transport_config_defaults_and_overrides() -> None:
                     "http_path": "/gateway",
                     "http_allow_non_loopback": True,
                     "http_allowed_origins": ["https://ops.example"],
+                    "http_allowed_hosts": ["gw.example.com:*"],
                 }
             }
         }
@@ -107,6 +109,7 @@ def test_http_transport_config_defaults_and_overrides() -> None:
         "path": "/gateway",
         "allow_non_loopback": True,
         "allowed_origins": ["https://ops.example"],
+        "allowed_hosts": ["gw.example.com:*"],
     }
 
 

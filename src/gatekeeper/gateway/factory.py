@@ -15,9 +15,10 @@ from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
-from gatekeeper.config.loader import ConfigError, boot, secret_source
+from gatekeeper.config.loader import ConfigError, boot, get_settings, secret_source
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.pipeline import GatewayPipeline
+from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
 
@@ -41,11 +42,13 @@ class GatewayRuntime:
 
 def _build_identity(platform: dict[str, Any], identities: list[dict[str, Any]]) -> IdentityResolver:
     kind = platform.get("adapters", {}).get("identity", "static_token")
-    if kind != "static_token":
-        raise ConfigError(
-            f"identity adapter {kind!r} not supported yet (static_token only; OIDC deferred)."
-        )
-    return StaticTokenResolver.from_config(identities)
+    if kind == "static_token":
+        return StaticTokenResolver.from_config(identities)
+    if kind == "oidc":  # M3.2: real IdP tokens via JWKS — a pure config swap, port unchanged
+        from gatekeeper.adapters.identity.oidc import OidcIdentityResolver
+
+        return OidcIdentityResolver.from_config((platform.get("identity") or {}).get("oidc") or {})
+    raise ConfigError(f"identity adapter {kind!r} not supported (static_token | oidc).")
 
 
 def _build_policy(platform: dict[str, Any]) -> PolicyEngine:
@@ -95,6 +98,15 @@ def build_pipeline(
         upstreams, timeout=timeout, secret_source=secret_source()
     )
 
+    # M3.4 observability: spike detector from platform.yaml; webhook URL from .env (may embed a
+    # token). Both optional — the pipeline runs identically without them (alerts are a signal
+    # channel, never a control).
+    spike = platform.get("observability", {}).get("deny_spike", {})
+    deny_detector = DenySpikeDetector(
+        window_s=float(spike.get("window_s", 60)), threshold=int(spike.get("threshold", 10))
+    )
+    alerter = WebhookAlerter(get_settings().alert_webhook)
+
     pipeline = GatewayPipeline(
         identity=identity,
         classifier=classifier,
@@ -102,6 +114,8 @@ def build_pipeline(
         ledger=ledger,
         upstream=upstream,
         hmac_key=hmac_key,
+        deny_detector=deny_detector,
+        alerter=alerter,
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 

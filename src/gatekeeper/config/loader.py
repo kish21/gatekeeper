@@ -46,6 +46,11 @@ class Settings(BaseSettings):
         default="",
         description="Bearer token the agent presents to the gateway (resolved to a Principal).",
     )
+    alert_webhook: str = Field(
+        default="",
+        description="Operator alert webhook URL (M3.4; Slack/Teams/PagerDuty-style). Lives in "
+        ".env because such URLs routinely embed tokens. Empty = alerting off.",
+    )
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     config_dir: Path = Field(default=Path("./config"))
