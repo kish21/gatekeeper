@@ -94,10 +94,24 @@ def build_proxy_server(
     # validate_input=False: every call reaches the pipeline so it is AUDITED — even one with
     # schema-invalid arguments (the upstream still validates on forward). With the SDK default
     # (True), a malformed call is rejected before our handler and would leave no ledger entry.
+    def _denied(exc: Exception) -> types.CallToolResult:
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"denied: {exc}")], isError=True
+        )
+
     @server.call_tool(validate_input=False)  # type: ignore[untyped-decorator]
     async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         routed = index.get(name)
         if routed is None:  # fail-closed: an unrouted tool is never forwarded
+            # Don't reveal unknown-vs-known to an UNAUTHENTICATED caller (security-review
+            # hardening): "unknown tool" here vs "denied" on a real tool would be a differential
+            # oracle enumerating the proxied surface that tools/list deliberately hides. So an
+            # unauthenticated caller gets the SAME generic "denied" as a real tool would; only an
+            # authenticated caller gets the helpful "unknown tool" answer.
+            try:
+                runtime.identity.resolve(token_provider())
+            except IdentityError as exc:
+                return _denied(exc)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=f"unknown tool {name!r}")],
                 isError=True,
@@ -105,6 +119,9 @@ def build_proxy_server(
         upstream, _tool = routed
         call_id = uuid4().hex
         try:
+            # Identity is (re-)resolved inside handle, which RECORDS the deny before refusing —
+            # so a real-tool call with a bad token is still ledgered (no bypass), unlike the
+            # unknown-tool branch above which touches no governed resource.
             result = await runtime.pipeline.handle(
                 token=token_provider(),
                 upstream=upstream,
@@ -115,9 +132,7 @@ def build_proxy_server(
         except (IdentityError, PolicyDenied) as exc:
             # Authn failure OR RBAC deny — both surface to the agent as an error; the call was
             # already recorded by the pipeline and was never forwarded (fail-closed).
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=f"denied: {exc}")], isError=True
-            )
+            return _denied(exc)
         if isinstance(result.raw, types.CallToolResult):
             return result.raw  # transparent relay of the upstream's untouched result
         return types.CallToolResult(

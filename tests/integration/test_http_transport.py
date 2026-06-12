@@ -138,10 +138,19 @@ async def test_http_unauthenticated_is_fail_closed_and_ledgered(
             result = await intruder.call_tool("read_file", {"path": "x.txt"})
             assert result.isError and "denied" in text(result)
 
+            # No tool-enumeration oracle (security-review hardening): a REAL tool and a
+            # nonexistent tool both return the SAME generic "denied" to an unauthenticated
+            # caller — "unknown tool" must NOT leak which names are proxied.
+            real = await intruder.call_tool("read_file", {"path": "x"})
+            bogus = await intruder.call_tool("no_such_tool_xyz", {})
+            assert text(real) == text(bogus)
+            assert "unknown tool" not in text(bogus)
+
     entries = ledger.read(limit=10)
-    assert len(entries) == 1
-    assert entries[0].principal == UNAUTHENTICATED_PRINCIPAL
-    assert entries[0].verdict is Verdict.DENY
+    # Every identity-deny on a tools/call is ledgered (the read_file probes reach the pipeline);
+    # the bogus-name probe is refused pre-routing with the same generic message.
+    assert entries and all(e.principal == UNAUTHENTICATED_PRINCIPAL for e in entries)
+    assert all(e.verdict is Verdict.DENY for e in entries)
     assert ledger.verify().ok
 
 

@@ -209,6 +209,17 @@ async def serve_http() -> None:
                 "sender-constrained tokens when available.",
                 extra={"host": cfg["host"], "port": cfg["port"]},
             )
+            # Exposed + the DEV static-token map = the committed demo tokens would grant access
+            # off-box (security-review finding). Not a hard refuse (an operator may run their own
+            # static map behind a trusted ingress), but it must be a loud, recorded signal —
+            # the deploy guide's "switch to OIDC before real use" step exists for exactly this.
+            if config["platform"].get("adapters", {}).get("identity") == "static_token":
+                log.warning(
+                    "exposed bind is using the static_token identity adapter: any caller who "
+                    "knows a token in config/identities.yaml gets that role. Switch to "
+                    "adapters.identity: oidc for real use (docs/features/oidc-identity.md).",
+                    extra={"host": cfg["host"]},
+                )
 
         index = await build_tool_index(runtime)
         log.info(
