@@ -1,30 +1,24 @@
 """Integration — the LIVE Streamable HTTP path (M3.1): real uvicorn, real MCP client, real ledger.
 
 Boots the governed FastAPI app on an ephemeral loopback port and drives it with the official MCP
-client over genuine HTTP. Proves the M3.1 exit criterion: calls over HTTP run the SAME pipeline
-(transparent result, RBAC deny, identity-deny all LEDGERED) and the chain stays `verify`-clean;
-plus the ADR-008 fail-closed surface (no unauthenticated tool enumeration) and the ADR-009
-DNS-rebinding protection (bad Host header refused).
+client over genuine HTTP (shared plumbing: ``http_harness``). Proves the M3.1 exit criterion:
+calls over HTTP run the SAME pipeline (transparent result, RBAC deny, identity-deny all LEDGERED)
+and the chain stays `verify`-clean; plus the ADR-008 fail-closed surface (no unauthenticated tool
+enumeration) and the ADR-009 DNS-rebinding protection (bad Host header refused).
 """
 
 from __future__ import annotations
 
-import asyncio
-import socket
 import sys
 import uuid
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 import sqlalchemy as sa
-import uvicorn
-from mcp import types
-from mcp.client.session import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
 from sqlalchemy.orm import Session
+from tests.integration.http_harness import client, serving, text
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
@@ -35,8 +29,6 @@ from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.factory import GatewayRuntime
 from gatekeeper.gateway.pipeline import UNAUTHENTICATED_PRINCIPAL, GatewayPipeline
 from gatekeeper.schemas.enums import Verdict
-from gatekeeper.transport.http_server import create_app
-from gatekeeper.transport.surface import build_tool_index
 
 KEY = "k" * 64
 TOKEN = "tok-alice"
@@ -85,60 +77,14 @@ def _runtime(ledger: SqliteLedgerStore) -> GatewayRuntime:
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-@asynccontextmanager
-async def _serving(ledger: SqliteLedgerStore) -> AsyncIterator[str]:
-    """Run the real governed app under real uvicorn on an ephemeral loopback port."""
-    runtime = _runtime(ledger)
-    try:
-        index = await build_tool_index(runtime)
-        app = create_app(runtime, index, path="/mcp")
-        port = _free_port()
-        server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=port, log_config=None, access_log=False)
-        )
-        task = asyncio.create_task(server.serve())
-        try:
-            async with asyncio.timeout(30):
-                # uvicorn exposes no readiness Event — polling `started` is its documented
-                # pattern; the timeout above bounds it.
-                while not server.started:  # noqa: ASYNC110
-                    await asyncio.sleep(0.02)
-            yield f"http://127.0.0.1:{port}"
-        finally:
-            server.should_exit = True
-            async with asyncio.timeout(30):
-                await task
-    finally:
-        await runtime.aclose()
-
-
-def _text(result: types.CallToolResult) -> str:
-    return "".join(b.text for b in result.content if isinstance(b, types.TextContent))
-
-
-@asynccontextmanager
-async def _client(base: str, token: str | None) -> AsyncIterator[ClientSession]:
-    headers = {"Authorization": f"Bearer {token}"} if token is not None else None
-    async with streamablehttp_client(f"{base}/mcp", headers=headers) as (read, write, _sid):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
-
-
 async def test_http_calls_run_the_same_pipeline_and_verify_clean(
     ledger: SqliteLedgerStore,
 ) -> None:
     fname = f"http-{uuid.uuid4().hex}.txt"
-    async with _serving(ledger) as base:
+    async with serving(_runtime(ledger)) as base:
         # Two principals over ONE gateway process — the per-request bearer model (ADR-008),
         # impossible over stdio (one token per process).
-        async with _client(base, TOKEN) as alice:
+        async with client(base, TOKEN) as alice:
             tools = await alice.list_tools()
             assert {"read_file", "write_file"} <= {t.name for t in tools.tools}
 
@@ -148,11 +94,11 @@ async def test_http_calls_run_the_same_pipeline_and_verify_clean(
             assert not write.isError
             read = await alice.call_tool("read_file", {"path": fname})
             assert not read.isError
-            assert "hello-over-http" in _text(read)  # transparent relay over HTTP
+            assert "hello-over-http" in text(read)  # transparent relay over HTTP
 
-        async with _client(base, RO_TOKEN) as bob:
+        async with client(base, RO_TOKEN) as bob:
             denied = await bob.call_tool("write_file", {"path": fname, "content": "nope"})
-            assert denied.isError and "denied" in _text(denied)  # RBAC deny surfaces as an error
+            assert denied.isError and "denied" in text(denied)  # RBAC deny surfaces as an error
 
         # /healthz liveness (M3.3 container probe) — unauthenticated, leaks nothing.
         async with httpx.AsyncClient() as http:
@@ -178,19 +124,19 @@ async def test_http_calls_run_the_same_pipeline_and_verify_clean(
 async def test_http_unauthenticated_is_fail_closed_and_ledgered(
     ledger: SqliteLedgerStore,
 ) -> None:
-    async with _serving(ledger) as base:
+    async with serving(_runtime(ledger)) as base:
         # No bearer at all: tool enumeration yields NOTHING (ADR-008 — fail-closed; an empty
         # list rather than an error so the SDK's internal tools/list refresh during a
         # tools/call can never short-circuit the pipeline's ledgered identity-deny).
-        async with _client(base, None) as anon:
+        async with client(base, None) as anon:
             listed = await anon.list_tools()
             assert listed.tools == []
 
         # A FORGED bearer on tools/call still reaches the pipeline, which ledgers the
         # identity-deny and then refuses — never a silent transport-level 401.
-        async with _client(base, "tok-forged") as intruder:
+        async with client(base, "tok-forged") as intruder:
             result = await intruder.call_tool("read_file", {"path": "x.txt"})
-            assert result.isError and "denied" in _text(result)
+            assert result.isError and "denied" in text(result)
 
     entries = ledger.read(limit=10)
     assert len(entries) == 1
@@ -201,7 +147,7 @@ async def test_http_unauthenticated_is_fail_closed_and_ledgered(
 
 async def test_http_rejects_unknown_host_header(ledger: SqliteLedgerStore) -> None:
     # ADR-009: SDK DNS-rebinding protection stays ON — a rebound Host is refused at the door.
-    async with _serving(ledger) as base:
+    async with serving(_runtime(ledger)) as base:
         async with httpx.AsyncClient() as http:
             resp = await http.post(
                 f"{base}/mcp",
