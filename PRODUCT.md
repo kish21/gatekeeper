@@ -73,7 +73,20 @@
 > without explicit config ack** (ADR-009); ADR-006 re-evaluated → still deferred (loopback). New config
 > knobs only (`transport.http_path/http_allow_non_loopback/http_allowed_origins`); no new adapter, no
 > migration, no new secret. Aspirational +<~5 ms p95 transport overhead → re-measure in `/eval`.
-> **🏗 M3 BUILD SESSION (2026-06-12, single session by user instruction — M3.1→M3.4 built together):**
+> **✅ M3 BUILD SESSION COMPLETE (2026-06-12, single session by user instruction — M3.1→M3.5 + ship):**
+> All five M3 slices built, reviewed, and committed on branch `feat/m3-enterprise-deployment`.
+> **/code-review (high, 7 angles):** the only actionable findings were test-harness duplication
+> (fixed: shared `tests/integration/http_harness.py`) + the container-overlay drift hazard (recorded
+> in the overlay header). **/security-review (full):** OIDC JWT validation + bearer handling traced
+> clean (alg-confusion/aud/iss/kid/fail-closed all held); **one finding fixed** — closed an
+> unauthenticated `tools/call` enumeration oracle (real-vs-unknown tool now indistinguishable
+> pre-auth) + added an exposed-`static_token` boot warning; the demo-token finding was refuted
+> (placeholders + fail-closed Host check + doc gating). **181 tests green ×4 full runs**, ruff/format/
+> mypy(strict) clean. **How to resume:** the three user-action proofs (real Entra token · actual Azure
+> deploy · one live credentialed connector) then the **M3 `/eval`** to re-measure the aspirational
+> +<5 ms HTTP overhead. PR: see `#Ship log`.
+>
+> **(historical) M3 build order this session — M3.1→M3.5 built together:**
 > **M3.1 HTTP transport ✅** (shared surface refactor, Streamable HTTP, ADR-007/008/009 enforced,
 > live-verified: stdio + HTTP entries in ONE verify-clean chain) · **M3.2 OIDC ✅** (PyJWT+JWKS behind
 > the unchanged `IdentityResolver` port, full fail-closed matrix vs real RS256 JWTs, live over HTTP;
