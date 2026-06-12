@@ -17,16 +17,6 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from tests.integration.http_harness import client, serving, text
-from tests.unit.test_identity_oidc import (
-    AUDIENCE,
-    GROUP_OPS,
-    GROUP_RO,
-    ISSUER,
-    ROLE_MAP,
-    StubJwks,
-    _token,
-)
 
 from gatekeeper.adapters.identity.oidc import OidcIdentityResolver
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
@@ -37,6 +27,16 @@ from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.factory import GatewayRuntime
 from gatekeeper.gateway.pipeline import UNAUTHENTICATED_PRINCIPAL, GatewayPipeline
 from gatekeeper.schemas.enums import Verdict
+from tests.integration.http_harness import client, serving, text
+from tests.unit.test_identity_oidc import (
+    AUDIENCE,
+    GROUP_OPS,
+    GROUP_RO,
+    ISSUER,
+    ROLE_MAP,
+    StubJwks,
+    _token,
+)
 
 KEY = "k" * 64
 ANNOTATIONS = {

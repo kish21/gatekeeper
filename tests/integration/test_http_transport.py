@@ -18,7 +18,6 @@ import httpx
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from tests.integration.http_harness import client, serving, text
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
@@ -29,6 +28,7 @@ from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.factory import GatewayRuntime
 from gatekeeper.gateway.pipeline import UNAUTHENTICATED_PRINCIPAL, GatewayPipeline
 from gatekeeper.schemas.enums import Verdict
+from tests.integration.http_harness import client, serving, text
 
 KEY = "k" * 64
 TOKEN = "tok-alice"
