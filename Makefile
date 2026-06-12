@@ -12,6 +12,10 @@ install: ## Install deps (prod+dev) and git hooks
 	uv sync --all-extras --group dev || pip install -e ".[ai]" && pip install pre-commit pytest ruff mypy
 	pre-commit install
 
+.PHONY: demo
+demo: ## Play the 5-beat governance story end-to-end (no setup; hermetic, throwaway ledger)
+	$(PY) -m scripts.demo
+
 .PHONY: serve
 serve: ## Run the gateway (MCP transport, from config/)
 	$(PY) -m gatekeeper.cli.app serve

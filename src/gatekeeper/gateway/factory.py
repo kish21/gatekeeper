@@ -15,7 +15,7 @@ from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
-from gatekeeper.config.loader import ConfigError, boot
+from gatekeeper.config.loader import ConfigError, boot, secret_source
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.ports.identity import IdentityResolver
@@ -68,9 +68,17 @@ def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) 
     )
 
 
-def build_runtime() -> GatewayRuntime:
-    """Build the full gateway runtime from config. Fail-closed + fail-loud (``ConfigError``)."""
-    settings, config = boot()
+def build_pipeline(
+    config: dict[str, Any], *, hmac_key: str, ledger: SqliteLedgerStore
+) -> GatewayRuntime:
+    """Wire the governed pipeline from config against an injected ledger + key.
+
+    The config-driven half of the composition root, with the two security-critical resources
+    (ledger + HMAC key) injected rather than opened here. ``build_runtime`` injects the configured,
+    migrated ledger; a demo/test harness can inject an isolated one — both then govern calls through
+    the *identical* identity/policy/classifier wiring, so a showcase proves the real path, not a
+    look-alike. The caller owns ``ledger`` (it is closed via the returned runtime's ``aclose``).
+    """
     platform, product = config["platform"], config["product"]
     upstreams = config["upstreams"]
 
@@ -81,9 +89,11 @@ def build_runtime() -> GatewayRuntime:
     timeout = float(
         platform.get("resilience", {}).get("upstream", {}).get("timeout", _DEFAULT_UPSTREAM_TIMEOUT)
     )
-    upstream = McpUpstreamClient.from_config(upstreams, timeout=timeout)
-    # Reuse the settings/config already booted above (no second config load / guard run).
-    ledger = open_ledger(settings, config)  # fail-loud "table must exist"
+    # secret_source() lets an upstream credential ({from_env: NAME}) resolve from .env / the real
+    # environment — so a token (e.g. GitHub's) never has to be written into config/upstreams.yaml.
+    upstream = McpUpstreamClient.from_config(
+        upstreams, timeout=timeout, secret_source=secret_source()
+    )
 
     pipeline = GatewayPipeline(
         identity=identity,
@@ -91,6 +101,14 @@ def build_runtime() -> GatewayRuntime:
         policy=policy,
         ledger=ledger,
         upstream=upstream,
-        hmac_key=settings.hmac_key,
+        hmac_key=hmac_key,
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
+
+
+def build_runtime() -> GatewayRuntime:
+    """Build the full gateway runtime from config. Fail-closed + fail-loud (``ConfigError``)."""
+    settings, config = boot()
+    # Reuse the settings/config already booted above (no second config load / guard run).
+    ledger = open_ledger(settings, config)  # fail-loud "table must exist"
+    return build_pipeline(config, hmac_key=settings.hmac_key, ledger=ledger)

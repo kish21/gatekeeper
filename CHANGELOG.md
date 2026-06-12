@@ -48,11 +48,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   0 bypass, RBAC golden 13/13, **0 operational failures** — and one honest miss, p95 overhead ~2× the
   10 ms budget, root-caused to the durable audit commit with a quantified WAL fix queued for M2.
 
+- **Upstream credentials from `.env` (`{from_env: NAME}`):** an upstream's `env:` value in
+  `config/upstreams.yaml` may now reference a secret by **name** (e.g.
+  `GITHUB_TOKEN: { from_env: GITHUB_TOKEN }`); the **value** is resolved at launch from `.env` /
+  the process environment (`secret_source()`, exported var wins) and injected into the launched
+  server — so a credentialed third-party MCP server (GitHub-class) is governed **without any secret
+  in YAML**. Fail-closed: a referenced-but-unset secret aborts boot with a clear error; resolved
+  values are never logged or persisted. Unit + live-subprocess integration tests; security-reviewed.
+- **One-command narrated showcase (`make demo` / `python -m scripts.demo`):** plays the 5-beat
+  governance story end-to-end on a terminal — operator read ALLOW → read-only write DENY (Cedar,
+  no side effect) → real third-party server governed zero-code → hash-chained ledger `verify` OK →
+  a deliberate ledger tamper **caught**. Hermetic (ephemeral HMAC key, throwaway ledger + sandbox
+  in a temp dir) and runs the *real* `build_pipeline()` wiring, not a look-alike. Plus
+  double-clickable Windows launchers (`RUN-DEMO.bat`, `SHOW-LOGBOOK.bat`, `VERIFY-LOGBOOK.bat`).
+- **Non-technical product explainer:** `docs/HOW-IT-WORKS.md` (guard/badge mental model, who-is-the
+  agent, config-not-code, deploy story, credentialed-server onboarding) + presentation-ready
+  `docs/how-it-works.svg`; README "See it in 30 seconds" section.
+
 ### Changed
 - CI now installs the `demo` extra in both the test job (so the "govern any server" proof runs for
   real) and the security job (so `mcp-server-time` is also CVE-scanned by pip-audit).
+- **Composition root split (`build_pipeline()` / `build_runtime()`):** the config-driven wiring is
+  now injectable with an isolated ledger + key, so the showcase and tests drive the *identical*
+  governed path `serve` uses. `python-dotenv` added as an explicit dependency.
 
 ### Fixed
+- **MCP-host robustness (`gatekeeper serve` under Claude Desktop etc.):** three field-found fixes.
+  (1) A boot failure is now reported on **stderr** — stdout is the MCP JSON-RPC channel, and the
+  previous stdout error corrupted it into opaque `"… is not valid JSON"` host errors. (2) A bare
+  `python`/`python3` upstream launcher is pinned to the gateway's **own interpreter**
+  (`sys.executable`) so config-declared servers import correctly regardless of the host's PATH.
+  (3) An unwritable ledger directory (host launched the gateway with the wrong working directory)
+  now surfaces as a clear `ConfigError` with a "set `cwd`" fix hint instead of a raw
+  `PermissionError` traceback. Each fix is regression-tested.
 - **Upstream session teardown (`McpUpstreamClient.aclose()`):** a pre-existing latent bug where
   shutdown could raise `RuntimeError: Attempted to exit cancel scope in a different task` when an
   upstream session was first opened inside a forward's child task (the MCP server dispatches calls via

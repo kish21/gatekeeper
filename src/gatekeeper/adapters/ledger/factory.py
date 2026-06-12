@@ -23,7 +23,17 @@ def open_ledger(
     if settings is None or config is None:
         settings, config = boot()  # validates GATEKEEPER_HMAC_KEY (fail-closed)
     path = ledger_path(config)
-    ensure_parent_dir(path)
+    try:
+        ensure_parent_dir(path)
+    except OSError as exc:
+        # Almost always a wrong working directory: the relative ledger path resolved under a
+        # protected dir (e.g. an MCP host launched the gateway without `cwd`). Turn the raw OSError
+        # into a clear, caught ConfigError with the fix, instead of an opaque traceback.
+        raise ConfigError(
+            f"Cannot create the audit-ledger directory for {path!r} ({exc}). The gateway's working "
+            "directory is likely wrong — set 'cwd' to the GateKeeperAI project folder in your MCP "
+            "host config (e.g. Claude Desktop), then retry."
+        ) from exc
     engine = create_engine(database_url(path))
     if not inspect(engine).has_table("ledger_entry"):
         raise ConfigError(

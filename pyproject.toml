@@ -13,6 +13,7 @@ dependencies = [
   "mcp",                 # official Model Context Protocol SDK (server + client)
   "pydantic>=2.13.4",         # typed contracts / DTOs
   "pydantic-settings>=2.14.1",# .env-driven settings (no hardcoding)
+  "python-dotenv>=1.0.1",    # read .env values for upstream credential refs ({from_env: NAME})
   "pyyaml>=6.0.3",           # YAML config loader
   "typer>=0.26.7",         # operator CLI
   "rich>=15.0.0",            # CLI output
