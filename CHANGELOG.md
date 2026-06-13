@@ -20,6 +20,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 - **Observability surface (M3.4):** `GET /metrics` (Prometheus text: calls by verdict, deny
   rate, governance-overhead p95 vs budget), `gatekeeper stats` (ledger-derived health), and a
   fail-safe webhook alert hook (verify-failure + deny-spike) via `GATEKEEPER_ALERT_WEBHOOK`.
+- **M3 evaluation harness:** `tests/eval/bench_transport_overhead.py` — drives the real
+  `serve --transport` binary over stdio + HTTP and measures the added HTTP overhead, gated by
+  `perf.http_transport_overhead_p95_ms` (config). Test-harness + config only; no runtime change.
 - Product definition (`PRODUCT.md`): vision, scope, plan, architecture (ADR-001…006).
 - Project structure + root scaffolding: src-layout package skeleton, layered ports-&-adapters
   folders, config engine (`config/*.yaml` + typed loader), secret-scan, pre-commit, Makefile, `STRUCTURE.md`.

@@ -65,7 +65,13 @@ surface (`test_http_rejects_unknown_host_header`).
 - **Bearer tokens remain replayable** if exfiltrated — acceptable on loopback (ADR-006 deferred);
   the non-loopback ack exists precisely to make wider exposure a recorded decision. OIDC (M3.2)
   and the deploy guide (M3.3) revisit this.
-- **Transport-overhead budget is aspirational** (+<~5 ms p95 over stdio on loopback) — derived,
-  not yet measured; re-measure with the `bench_governance_latency.py` pattern in the M3 `/eval`.
+- **Transport-overhead budget — measured in the M3 `/eval` (2026-06-13), aspiration missed at p95.**
+  `tests/eval/bench_transport_overhead.py` drives the real `serve --transport` binary over both
+  transports: the transport-isolation delta (`tools/list`, no ledger = ASGI + localhost hop) is
+  **p50 ≈ +5 ms (stable), p95 +5.6…+11 ms** on a Windows dev box — **met at the median, over the
+  aspirational < ~5 ms p95**. Gated by `perf.http_transport_overhead_p95_ms` (config). Re-measure on
+  the Linux/SSD CI target before treating as canonical. The governed-call p95 delta is noise-dominated
+  (carried fsync baseline) and is reported as context only, not gated. See `PRODUCT.md#Evaluation` →
+  M3 addendum.
 - `initialize` itself is unauthenticated (protocol handshake, reveals only server name/version);
   the governed surface (`tools/list`, `tools/call`) is where fail-closed auth applies.

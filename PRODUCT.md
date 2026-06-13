@@ -85,6 +85,20 @@
 > mypy(strict) clean. **How to resume:** the three user-action proofs (real Entra token · actual Azure
 > deploy · one live credentialed connector) then the **M3 `/eval`** to re-measure the aspirational
 > +<5 ms HTTP overhead. PR: see `#Ship log`.
+> **`/eval` M3 ✅ DONE (2026-06-13):** measured on HEAD `a0c279c`. **181/181 green, 0 operational
+> failures** across the suite + **4 transport-bench reproductions** (~13k governed round-trips). New
+> **`tests/eval/bench_transport_overhead.py`** drives the real `serve --transport` binary over BOTH
+> transports + a config gate (`platform.yaml perf.http_transport_overhead_p95_ms: 5.0`). **Result:
+> the aspirational HTTP-overhead budget is MISSED at p95, met at p50** — transport-isolation
+> (`tools/list`, no fsync) p50 ≈ **+5 ms (stable)**, p95 **+5.6…+11 ms** (Windows box; the
+> governed-call p95 delta is fsync-noise-dominated — even went negative once — so the harness gates
+> the transport isolation, not the governed call: a deliberate eval-integrity fix). OIDC fail-closed
+> matrix re-measured (real RS256 JWTs + live HTTP); governance coverage **100%/0-bypass held over
+> HTTP** in one `verify`-clean stdio+HTTP chain; LLM cost $0; the carried **M1 fsync miss is
+> unchanged** (p95 ~27 ms vs 10 ms budget; WAL lever re-reproduced). **Honest carry:** the 3
+> user-action cloud proofs are **unmeasurable in this env** (guides ready; fakes/locals stand in) —
+> partial-by-construction, not skipped. **Phase confidence 85%.** See `#Evaluation` → M3 addendum.
+> **Next: `/ship`** (deep review + `/security-review` of the OIDC/HTTP auth surface → PR → handoff).
 >
 > **(historical) M3 build order this session — M3.1→M3.5 built together:**
 > **M3.1 HTTP transport ✅** (shared surface refactor, Streamable HTTP, ADR-007/008/009 enforced,
@@ -407,6 +421,11 @@ pipeline; `perf.overhead_p95_ms: 10`, with the known fsync miss carried). New an
 aspirational** (no probe run this docs session — per the harvested budget rule): HTTP transport adds
 **< ~5 ms p95 over stdio on loopback** (ASGI dispatch + localhost hop) — **re-measure in `/eval`**
 with the existing `bench_governance_latency.py` pattern before treating it as fact.
+> **→ MEASURED in the M3 `/eval` (2026-06-13):** dedicated `tests/eval/bench_transport_overhead.py`
+> (real `serve --transport` binary, both transports). Result: **missed at p95, met at p50** —
+> transport-isolation p50 ≈ +5 ms (stable), p95 +5.6…+11 ms on a Windows box. The aspiration was
+> honest but optimistic; the gate (`perf.http_transport_overhead_p95_ms`) fails until re-measured on
+> Linux/SSD. See `#Evaluation` → M3 addendum for the full breakdown.
 
 **Patterns / anti-patterns (this slice):** applied — same chain-of-responsibility PEP behind a second
 thin transport binding; shared surface-builder (don't repeat the proxy surface). Avoided — authz-in-
@@ -823,14 +842,124 @@ was built deliberately as its M1 analog.
   p95 under 10 ms (closes gap 1+2); ship **M2** to close the evasion gap + add the classifier eval
   (closes gap 3+4). None blocks the M1 wedge ("verifiable governance"), which is measured-good.
 
-**Next phase:** **`/ship`** — deep fresh-eyes review, `/security-review`, reconcile docs to reality,
-confidence score, open the PR, hand off. (The latency finding + WAL lever should be carried into the
-PR description and queued as an M2/follow-up slice, not silently dropped.)
+**Next phase (M1 eval):** **`/ship`** — superseded by the M3 cycle below; the M1 eval shipped in
+[PR #22](https://github.com/kish21/gatekeeper/pull/22).
+
+---
+
+### M3 Evaluation addendum (2026-06-13) — "Enterprise deployment readiness" measured
+
+**Verdict (honest):** M3 **holds the M1 quality bar across the new surfaces** (HTTP transport + OIDC
+identity) — every number reproduced this session on `main` HEAD `a0c279c`, **0 operational failures**
+across the whole suite + 4 latency-harness reproductions. It **misses one aspirational secondary
+target** — the M3.1 HTTP-transport-overhead budget — by a small, hardware-noisy margin, reported
+straight (met at p50, missed at p95). The **carried M1 fsync latency miss is unchanged** (still open;
+WAL lever re-reproduced). **Three M3 exit clauses are operational proofs that cannot be measured here**
+(real Entra token · actual Azure run · one live credentialed connector) — they need the user's
+tenant/subscription/credential and are recorded as partial-by-construction, not checked off.
+
+**What "good" means for M3 (tied to the slices' exit criteria).** M3 ships **no LLM on the request
+path** still (M2's remit), so quality is again *deterministic governance quality* — but now measured on
+the **new** attack/identity/transport surfaces M3 introduced:
+1. **Identity correctness over the new auth surface** (OIDC JWT validation) — does it accept only valid
+   tokens and **fail closed** on every malformed/forged/expired/downgraded/outage case?
+2. **Governance coverage holds across transports** — is *every* call over **HTTP** still
+   authenticated → policy-decided → ledgered, `verify`-clean in one chain with stdio, 0 bypass?
+3. **Cost — transport latency** (the new M3.1 axis) — the added HTTP overhead over stdio on loopback.
+4. **Cost — LLM** — still $0 (no LLM path; M2).
+
+#### Measured results (M3)
+
+| Axis | Metric | Result | How measured (reproducible) | vs target |
+|---|---|---|---|---|
+| **Suite / op-integrity** | full suite on HEAD `a0c279c` | **181 passed / 0 failed / 0 skipped** | `pytest -q`; ruff + ruff-format + mypy(strict, 54 src files) clean | ✅ 0 operational failures |
+| **OIDC identity correctness** | fail-closed matrix on the new auth surface | **all paths fail closed** | `unit/test_identity_oidc.py` (16: real RS256 JWTs from a local fake-IdP — expired/wrong-aud/wrong-iss/missing-exp/forged-sig/HS-or-none downgrade/unmapped-or-missing-groups/JWKS-outage/token-never-echoed) + `integration/test_oidc_http.py` (2, live over HTTP) | ✅ no default role; authenticated ≠ authorized |
+| **Coverage across transports** | every HTTP call authenticated → decided → ledgered, 0 bypass | **100% / 0 bypass** | `integration/test_http_transport.py` — stdio (seq 2–4) + HTTP (seq 5–7) entries in ONE chain → `verify` OK; forged/missing bearer → ledgered `<unauthenticated>` DENY then refused; Host-rebind → 421 | ✅ = M1 north-star, held over HTTP |
+| **Cost — LLM** | $/run | **$0.00** | no LLM call on the M3 path (`risk.enabled: false`) | ✅ |
+| **Cost — HTTP transport overhead** (NEW) | added p95 of HTTP over stdio on loopback (transport isolation, no ledger) | **p50 ≈ +5.2 ms (stable) · p95 +5.6…+11 ms** (4 runs) | `tests/eval/bench_transport_overhead.py` — the **real `serve --transport` binary** ×2, official MCP client, `tools/list` (no-fsync) isolates ASGI+localhost-hop | ❌ **over the aspirational < ~5 ms p95** (met at p50) |
+| **Cost — governance overhead** (carried M1) | added gateway overhead p95 (Cedar + HMAC + 2× SQLite append) | **p95 ≈ 26.9–28.8 ms · p50 ≈ 17.7 ms** | `tests/eval/bench_governance_latency.py` (6,300 calls, 0 op-failures) | ❌ **carried M1 miss, unchanged** (~2.7× the 10 ms budget) |
+
+**Operational failures (separated from quality, per eval-integrity): 0.** 181 tests + **4 transport-bench
+reproductions** (~13k governed round-trips) + 2 governance-overhead runs (6,300 calls each) recorded
+**zero** errored/dropped calls. The **one** anomaly seen — a `BrokenResourceError` on stdio-client
+*teardown* in one early bench run — was correctly classified as a **cleanup-race artifact AFTER the
+measurement** (the MCP-SDK stdio teardown family the codebase already documents), not a measurement
+failure: the harness now swallows a teardown-only race **iff samples were already collected** and re-ran
+clean 4×. It never contaminated a latency number.
+
+#### The HTTP-transport miss — measured, not asserted (and why the gated number is the right one)
+The M3.1 addendum recorded the budget as **explicitly aspirational** (+< ~5 ms p95, *derived* not
+measured — the harvested budget rule). Re-measured here, the honest picture:
+
+| Quantity | p50 | p95 | reproducible? |
+|---|---|---|---|
+| **Transport isolation** (`tools/list`, NO ledger) — *the gated number, = "ASGI dispatch + localhost hop"* | **~+5.0 ms (stable across 4 runs)** | **+5.6 … +11.0 ms** | yes — `bench_transport_overhead.py` |
+| Governed `tools/call` (end-to-end context) | +5.3 … +7 ms | **−2.9 … +28 ms (noise-dominated, discarded)** | unreliable |
+
+Two honest calls were made in the harness: (a) **gate the transport-isolation delta, not the governed
+call** — the governed-call p95 is swamped by the *carried M1 fsync baseline's* tail jitter on a shared
+Windows box (it even went **negative** one run — HTTP "faster" at p95 is impossible except as noise), so
+gating it would measure the wrong thing (a category error); (b) **do not relax the 5 ms budget and do not
+silently pass it** — the gate (`platform.yaml perf.http_transport_overhead_p95_ms: 5.0`, config not
+hardcoded) **fails** the run, exactly as designed. **Read:** the *median* transport overhead **meets** the
+aspiration (~5 ms); the *p95* **misses** it (~5.6–11 ms) on this hardware. Absolute values are
+**Windows-dev-box-dependent** (the fsync baseline and GC tails dominate); the structure (one ASGI hop +
+one localhost round-trip) is portable. **Lever:** re-measure on the **Linux/SSD CI target** (faster fsync,
+dedicated box) before quoting a canonical number — likely brings p95 under 5 ms given the median already
+sits there.
+
+#### Scoring-bias check (AI-eval integrity)
+Still **N/A-by-construction**: M3 scores against **deterministic** expected outcomes (RBAC verdicts +
+JWT-signature validity), no LLM judge — no grader bias to audit. That check arrives with the **M2**
+risk-classifier eval.
+
+#### Baseline + regression gates (recorded)
+- **OIDC / coverage / RBAC**: the 181-test suite (incl. the golden RBAC 13/13 and the adversarial
+  no-bypass set) is the standing baseline — CI-gated on every push + PR; a drift fails loudly.
+- **Transport latency** (NEW): baseline = `perf.http_transport_overhead_p95_ms: 5.0` in
+  `config/platform.yaml`; `bench_transport_overhead.py` is the reproducible harness + gate (exits
+  non-zero above budget). **Run-on-demand, not in the default CI gate** (subprocess micro-bench, flaky
+  on shared runners — same honest choice as the governance bench).
+- **Governance latency** (carried): `perf.overhead_p95_ms: 10.0` + `bench_governance_latency.py`,
+  unchanged; WAL `--diagnose` lever re-reproduced this session (append p95 17.2 ms FULL/DELETE →
+  3.8 ms WAL/NORMAL / 4.7 ms WAL/FULL ⇒ allow-path ~7.6–9.4 ms, under budget).
+
+#### Honest gaps (M3, carried + new)
+1. **HTTP transport p95 over the aspirational budget** (new) — ~5.6–11 ms p95 vs < ~5 ms; met at p50.
+   Hardware-noisy; re-measure on Linux/SSD CI. Small and not on the security path — the wedge is intact.
+2. **Three M3 exit clauses are operational proofs, unmeasurable here** — a **real Entra-issued token**
+   (needs the user's tenant), an **actual Azure run** (needs the subscription login), and **one live
+   credentialed connector** (needs a real third-party token). All three have **copy-paste guides** in
+   their feature docs / runbook and are exercised against fakes/locals (fake-IdP RS256 JWTs, a real local
+   container, the live-subprocess secret-injection test). Recorded **partial-by-construction**, not skipped.
+3. **Carried M1 fsync latency miss** — governance overhead still ~2.7× the 10 ms budget; WAL lever queued
+   for the first M2 slice (closes it). Note this session's p95 (~27 ms) ran a touch higher than M1's
+   recorded ~21.5 ms — same root cause (fsync), just more box jitter today; hardware-dependent as flagged.
+4. **classification→RBAC evasion** (carried, pinned) — open until M2's LLM classifier.
+5. **No AI-quality metric** — no LLM path in M1/M3; M2's remit.
+
+#### Confidence score (M3) — **85%**
+- **Solid (measured/verified):** 181/181 green + 0 operational failures across the suite and 4 bench
+  reproductions; OIDC fail-closed matrix measured on **real RS256 JWTs** + live HTTP; governance coverage
+  = 100%/0-bypass **held over HTTP** with a single `verify`-clean stdio+HTTP chain; LLM cost $0; the new
+  transport-overhead number **measured + reproduced 4×** with a config-gated harness; WAL lever
+  re-reproduced.
+- **Risky/untested:** transport p95 misses the aspirational budget (noisy Windows box); the carried fsync
+  miss is open; **3 exit clauses are live-cloud proofs not exercisable in this environment** (guides ready,
+  fakes/locals stand in); the evasion gap stays open until M2.
+- **To raise it:** complete the 3 user-action proofs (real Entra · Azure · credentialed connector);
+  re-measure both latency harnesses on the **Linux/SSD CI** target; land **WAL** (closes the governance
+  miss) and **M2** (closes the evasion gap + adds the classifier eval + scoring-bias check).
+
+**Next phase:** **`/ship`** — deep fresh-eyes review, `/security-review` (the OIDC + HTTP auth surface),
+reconcile docs to reality, confidence score, open the PR, hand off. Carry into the PR: the HTTP-overhead
+finding + the Linux/SSD re-measure lever + the 3 outstanding live-cloud proofs (do not silently drop them).
 
 ## Ship log
 
 | Date | Shipped | Review + security | Docs reconciled? | CHANGELOG | Rollback / flag | PR |
 |---|---|---|---|---|---|---|
+| 2026-06-13 | **M3 Evaluation** — reproducible HTTP-transport-overhead harness (`tests/eval/bench_transport_overhead.py`: real `serve --transport` binary over stdio + HTTP, official MCP client, config gate `perf.http_transport_overhead_p95_ms`) + the measured `#Evaluation` M3 addendum (181/181 green · 0 op-failures across suite + 4 bench reproductions · OIDC fail-closed + coverage-over-HTTP held · **honest miss: HTTP overhead p95 ~5.6–11 ms vs aspirational <5 ms, met at p50**, gated not silently fixed) | **Deep `/code-review` (high, 2 finders + verify):** fixed a real integrity bug — an all-calls-fail run would crash on `statistics.median([])` *before* the op-failure report; now reports a clean FAIL. Refuted 3 (teardown-race-swallows-partial: in-loop `try/except` makes `samples` always complete; private-`_percentile` import = deliberate sibling reuse; same-port-both-configs = benign/sequential). **Security:** **no `src/`/auth/data change** (test-harness + non-secret config knob + docs); harness uses an ephemeral HMAC key (env-only, never printed), the fake dev token, arg-vector subprocess, loopback-only HTTP — gitleaks re-runs in CI. **OWASP-LLM N/A** (no M1/M3 LLM path). | ✅ `docs/features/http-transport.md` (budget now "measured, missed at p95"), `PRODUCT.md#Evaluation` M3 addendum + Architecture M3.1 forward-pointer + marker, CHANGELOG — all match the reproducible harness; README carries no perf claim (nothing to fix) | `[Unreleased]` (test+config+docs only → no semver bump) | **Docs + test-harness + additive config only**; gateway runtime behavior **unchanged** (the new knob is read only by the bench). Rollback = **revert this PR**; no migration, no flag. Signal to watch: the transport-overhead p95 vs budget when re-measured on the Linux/SSD CI target. | _this PR_ |
 | 2026-06-09 | **M1.3 — tamper-evidence gate + `gatekeeper show <call_id>`** (verify confirmed to pinpoint forgery on a ledger of RBAC verdicts; operator inspection of one recorded decision) | `/code-review` (high) no findings; `/security-review` no **new** vuln ≥8 (tenant-scoping = pre-existing documented limitation). Fresh-eyes live-path trace via the real binary. | ✅ `docs/features/tamper-evidence.md`, PRODUCT (#Build log + marker), README, CHANGELOG — match code | `[Unreleased]` (+ caught up missing M1.1/M1.2) | **Additive** (a stubbed command now works); no migration. Rollback = **revert PR #19**. Signal: CI green + `show` returns a decision on a real ledger. | [#19](https://github.com/kish21/gatekeeper/pull/19) |
 | 2026-06-09 | **M1 Evaluation** — reproducible governance-overhead latency harness (`tests/eval/bench_governance_latency.py` + `--diagnose`), config-driven perf budget (`platform.yaml perf.overhead_p95_ms`), and the measured `#Evaluation` (coverage 100%/0 bypass · RBAC golden 13/13 · 0 op-failures · honest latency miss p95 ~2× budget, root-caused + WAL fix quantified) | **Deep `/code-review`** (3 parallel finders + verify): fixed the nearest-rank percentile off-by-one; **made the component + WAL tables reproducible** via `--diagnose` (was measured-but-not-in-repo — a real doc-integrity finding); added the logging-suppression caveat. **Security:** **no `src/` / auth / data / permission change** (test harness + non-secret config knob + docs); secret-scan clean. **No LLM path** (M1) → OWASP-LLM N/A, deferred to M2. | ✅ `PRODUCT.md#Evaluation` + marker, CHANGELOG; README/feature docs carry no perf claim (nothing to fix) — all match the reproducible harness | `[Unreleased]` (no public-API change → no semver bump) | **Docs + test-only + additive config**; gateway runtime behavior **unchanged** (the budget knob is read only by the harness). Rollback = **revert this PR**; no migration, no flag. Signal to watch: the harness p95 vs budget after the WAL slice lands. | [#22](https://github.com/kish21/gatekeeper/pull/22) |
 | 2026-06-12 | **M3.1 `/architect` — HTTP-transport decisions (docs-only)** — `#Architecture` M3.1 addendum: MCP **Streamable HTTP** via the official SDK · FastAPI + uvicorn **single worker** (`/mcp` + `/healthz`) · **ADR-007** (single worker preserves the ledger single-writer assumption by construction) · **ADR-008** (authn decided + recorded in the pipeline; transport only extracts the per-request bearer) · **ADR-009** (loopback-by-default, non-loopback bind refuses boot without explicit config ack) · ADR-006 re-evaluated → still deferred (loopback) · config knobs only, no new adapter / migration / secret · transport-overhead budget recorded as explicitly **aspirational** (<~5 ms p95) → `/eval` re-measure | **Deep claims-verification review** — every factual claim traced to the installed SDK (`StreamableHTTPSessionManager`, `RequestContext.request`, `TransportSecuritySettings` in `mcp` 1.27.2), real code (`append()` is sync read-prev→insert, no `await`), and config (`transport.*`, `perf.overhead_p95_ms: 10.0`). `/security-review` **N/A** (docs-only; no `src/`/auth/data change; nothing token-shaped in the diff — gitleaks re-checks in CI) | ✅ addendum + resume marker; **CHANGELOG caught up** (M3 cycle entry incl. the missing #26 mention); README untouched — still accurately stdio-only, no false capability claim | `[Unreleased]` (docs-only → no semver bump) | **Docs-only**; no migration, no flag. Rollback = **revert PR #27**. Signal to watch: `/build` M3.1 must implement to these ADRs — ADR↔code divergence is the drift to catch | [#27](https://github.com/kish21/gatekeeper/pull/27) |
