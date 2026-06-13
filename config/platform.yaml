@@ -64,3 +64,6 @@ observability:
 # ADR-001 latency budget). A p95 above this is a regression and fails the harness.
 perf:
   overhead_p95_ms: 10.0    # ADR-001 / Architecture#Perf budget: p95 < ~10 ms (M1, deterministic)
+  # M3.1 addendum: HTTP transport may add < ~5 ms p95 over stdio on loopback (was aspirational;
+  # measured + gated by tests/eval/bench_transport_overhead.py — the M3 /eval re-measurement).
+  http_transport_overhead_p95_ms: 5.0
