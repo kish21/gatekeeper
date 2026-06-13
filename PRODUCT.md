@@ -98,7 +98,22 @@
 > unchanged** (p95 ~27 ms vs 10 ms budget; WAL lever re-reproduced). **Honest carry:** the 3
 > user-action cloud proofs are **unmeasurable in this env** (guides ready; fakes/locals stand in) —
 > partial-by-construction, not skipped. **Phase confidence 85%.** See `#Evaluation` → M3 addendum.
-> **Next: `/ship`** (deep review + `/security-review` of the OIDC/HTTP auth surface → PR → handoff).
+> **`/ship` M3 ✅ DONE (2026-06-13):** M3 Evaluation shipped — [PR #29](https://github.com/kish21/gatekeeper/pull/29)
+> squash-merged to `main` (`82d273f`), CI green. (M3 build = [PR #28](https://github.com/kish21/gatekeeper/pull/28) `a0c279c`.)
+> **`/learn` M3 ✅ DONE (2026-06-13):** M3 cycle closed with an evidence-based retro (`#Learnings` → **M3
+> addendum**). North-star **held over the new HTTP+OIDC surfaces** (100%/0-bypass · OIDC fail-closed on real
+> RS256 JWTs · 181/181 + 0 op-failures, all CI-gated); instrumentation **re-verified present this session**
+> (CI runs the full suite + container `verify` on every push/PR — not asserted from the note). **Honest carry:
+> the 3 cloud proofs (real Entra · Azure · credentialed connector) are USER ACTIONS, unmeasurable in-env → the
+> M3 exit gate is partial-by-construction**; HTTP p95 misses the aspirational <5 ms on noisy Windows hardware
+> (re-measure on Linux/SSD). **Decided-next = VERIFICATION-FIRST:** user completes the 3 cloud proofs (+
+> re-measure latency on Linux/SSD · re-evaluate **ADR-006** when Azure/OIDC land — its trigger is now the
+> closest) → **then resume the planned chain: M2 at its ~2026-08-08 box (reminder verified armed).**
+> Vision-aligned, **zero scope creep, nothing to kill.** Toolkit harvest: the `/eval` budget-*checking*
+> refinement (gate the isolated layer; don't certify single-digit-ms budgets on a dev box) → patched into
+> `product-playbook/commands/eval.md` + installed copy synced. **Cycle confidence 85%.**
+> **➡ THIS CYCLE IS DONE.** The 3 cloud proofs are **user actions** (guides in the M3.2/M3.3 feature docs +
+> M3.5 runbook); after them, resume via `/playbook` → **M2 on/after 2026-08-08**.
 >
 > **(historical) M3 build order this session — M3.1→M3.5 built together:**
 > **M3.1 HTTP transport ✅** (shared surface refactor, Streamable HTTP, ADR-007/008/009 enforced,
@@ -1109,6 +1124,140 @@ since FIRED; the rest keep their triggers.)*
   structurally unmet, not skipped; the latency miss is real until WAL lands; the evasion gap is open until M2.
 - **To raise it:** get one real reviewer to drive the demo (external signal); land WAL + re-measure on
   Linux/SSD; ship M2.1 to flip the evasion test to deny.
+
+### M3 Learnings addendum (2026-06-13) — "Enterprise deployment readiness" cycle retro
+
+**Cycle:** M3 (HTTP transport · OIDC identity · container+Azure · observability · connector runbook) —
+Vision-amendment→Build (PR #28)→Eval (PR #29)→Ship complete, both merged to `main`. This is the post-M3 retro.
+
+**Honest framing (unchanged from M1):** still a **pre-deployment portfolio build** — no external
+production users. The metric is real and **CI/ledger-instrumented**, not a production dashboard. **New
+this cycle:** M3 introduced **three operational cloud proofs** (real Entra token · actual Azure run · live
+credentialed connector) that genuinely **cannot** be measured in this environment — they need the user's
+tenant / subscription / credential. They are recorded **partial-by-construction, NOT checked off** — so
+the **M3 exit gate is not yet fully met** (honest).
+
+#### 1. Success metric + result (measured + instrumented — verified this session)
+North-star unchanged — **verifiable governance coverage** — now stressed on the **new M3 surfaces** (HTTP
++ OIDC). Measured in the M3 `/eval` on HEAD `a0c279c`, every number reproduced by a named test/harness;
+the standing instrumentation was **re-verified present this session** (not asserted from the note):
+
+| Metric | Result | Standing instrumentation (verified) |
+|---|---|---|
+| Coverage / no-bypass — **held over HTTP** | **100% / 0 bypass** | `tests/integration/test_http_transport.py` (stdio+HTTP in one `verify`-clean chain) — runs in CI `pytest` on **every push + PR** |
+| OIDC identity correctness (fail-closed matrix) | **all paths fail closed** | `tests/unit/test_identity_oidc.py` (16, real RS256) + `tests/integration/test_oidc_http.py` (2, live HTTP) — CI-gated |
+| Suite / op-integrity | **181 passed / 0 failed / 0 skipped · 0 op-failures** | `pytest -q` + container build→`/healthz`→`verify` (CI `container` job) on every push + PR |
+| Cost — HTTP transport overhead (**new; the one miss**) | p50 ≈ **+5 ms (meets)** · p95 **+5.6–11 ms (misses** aspirational <5 ms) | `tests/eval/bench_transport_overhead.py` + config gate `perf.http_transport_overhead_p95_ms: 5.0` — run-on-demand |
+| Cost — governance overhead (**carried M1 miss**) | p95 ≈ **27 ms** vs 10 ms budget | `bench_governance_latency.py` + `perf.overhead_p95_ms: 10.0` — run-on-demand |
+| Cost — LLM | **$0.00** | no LLM path (M2's remit) |
+
+**What "instrumented" means here (verified, not asserted):** `.github/workflows/ci.yml` runs the full
+`pytest` suite + the container `/healthz`+`verify` smoke + gitleaks + pip-audit on **every push to `main`
+and every PR** — the coverage / RBAC / OIDC / no-bypass metric is re-asserted on every change (the
+realistic dashboard-analog for a pre-deployment tool). The two latency micro-benchmarks are config-gated
+harnesses, **run-on-demand** (flaky on shared runners — documented). **Not** instrumented: a live usage
+dashboard / alerting on a *real* deployment — its trigger (a real deployment) is now **closer** (M3.4
+built the surface) but **unfired in-env**.
+
+#### 2. User / usage signal
+- **The strongest real signal this cycle is the demand evidence itself** — the **anonymized enterprise
+  platform-requirements specification (2026-06)** that fired M3's triggers. It is the **first concrete
+  external demand signal** the product has had and validates the `#Vision` buyer verbatim; M3 is the
+  product **responding to a real market signal**, not internal enthusiasm.
+- **Adversarial-test usage** surfaced a real defect: the `/security-review` found + closed an
+  **unauthenticated `tools/call` enumeration oracle** (real-vs-unknown tool now indistinguishable
+  pre-auth) — an internal but genuine usage signal that hardened the auth surface.
+- **Still unmet (honest):** an external operator driving the **hosted** gateway. **Trigger to generate
+  it:** the user completing the 3 cloud proofs (real Entra · Azure · credentialed connector) — at which
+  point a real network operator exercises the live path.
+
+#### 3. Retro — what worked · what to change
+**Worked:**
+- **Anti-drift held under a multi-item pull:** M3 (5 slices) was inserted **only** because pre-documented
+  triggers fired, each **quoted per `#Scope` row** — the discipline survived a large, appealing addition.
+- **Eval integrity held under a noisy result (again):** the harness gated the **isolated** transport delta
+  (`tools/list`, no fsync), **not** the governed-call p95 that the carried fsync baseline's tail jitter
+  swamped (it even went **negative** once — "HTTP faster at p95" is impossible except as noise). Gating
+  the end-to-end number would have measured the wrong thing. The budget was **neither relaxed nor silently
+  passed** — the gate fails, honestly.
+- **The M1 harvest paid off:** the HTTP-overhead budget was set **explicitly aspirational + re-measure in
+  `/eval`** (the rule that graduated last cycle into `/architect`), so the p95 miss was a **flagged,
+  measured, gated** outcome — not a trust-eroding surprise.
+- **Security-review caught a real oracle** and fixed it before ship.
+
+**To change:**
+- **A single-digit-ms budget cannot be certified on a shared Windows dev box.** The median already sits at
+  the aspiration (~5 ms); the p95 (5.6–11 ms) is GC/fsync-tail-dominated and hardware-specific. The
+  `/architect` rule said "mark aspirational + re-measure" — the **missing half is *how*:** gate the
+  **isolated** layer and **re-measure on a dedicated Linux/SSD** target before quoting a canonical number.
+  (Harvested below into `/eval`.)
+- **Single-session M3.1→M3.5** (user-instructed) traded the playbook's one-slice-per-session isolation for
+  speed — it **held** (181 tests, clean reviews), but per-slice review granularity was coarser.
+  Project-specific; noted, not generalised.
+
+#### 4. Decided next — from evidence (re-checked vs vision + OUT-OF-SCOPE)
+**The M3 exit gate is NOT fully met** — three exit clauses are **operational cloud proofs outstanding**
+(real Entra token · actual Azure run · live credentialed connector), each with a copy-paste guide but each
+needing the user's tenant / subscription / credential. So the evidence-based next move is
+**verification-first, before any new build:**
+
+1. **USER-ACTION — complete the 3 M3 cloud proofs:** real Entra token (M3.2 doc guide) · Azure Container
+   Apps deploy (M3.3 guide) · one live credentialed connector (M3.5 runbook). This **closes the M3 exit
+   gate** that is currently partial-by-construction. **No code; guides ready.**
+2. **Re-measure both latency harnesses on the Linux/SSD CI target** — likely brings HTTP p95 **under 5 ms**
+   (median already there) and gives the carried fsync number a canonical (non-Windows) value.
+3. **Re-evaluate ADR-006 (DPoP/mTLS) the moment Azure deploy + real OIDC land** — both of its trigger
+   clauses (**network exposure** · **real OIDC**) come into actual view at M3.3/M3.2. Still deferred today
+   (M3 ran loopback/local), but this is **the deferred item whose trigger is now closest** — re-evaluate
+   it **explicitly** at deploy time; do not let it pass silently.
+4. **Then resume the planned chain — M2 at its ~2026-08-08 box (unchanged).** Reminder **verified armed
+   this session** (task `gatekeeper-m2-resume-reminder`, fires 2026-08-08 09:00, enabled). First M2 slice
+   still lands the **WAL PRAGMA** (closes the carried latency miss) + closes the classification→RBAC
+   evasion gap.
+
+**Vision re-check (no drift):** M3 *deployed* the verifiable-governance wedge; it changed **nothing** about
+the wedge. Dashboard/approval UI, multi-tenant, rate-limiting, policy-editor UI **stay deferred** — their
+triggers are unfired. The only deferred item whose trigger is **approaching** is ADR-006, handled above.
+**No scope creep.**
+
+**Kill / deprecate check:** **nothing to kill** — all M3 surfaces measured-good (OIDC fail-closed,
+coverage-over-HTTP 100%, container boots + `verify`s). The one miss (HTTP p95) is a hardware-noise
+re-measure, not a failing feature. **Honest null result**, not a rubber-stamp.
+
+#### 5. Observability + cost watch (post-M3)
+- **Observability spine:** the ledger + structured logs, **plus M3.4's new surface** — `/metrics`
+  (Prometheus text incl. an overhead-p95-vs-budget gauge), `gatekeeper stats`, fail-safe webhook alerts
+  (verify-failure / deny-spike). Built + exercised locally/against fakes; they **light up for real on a
+  hosted deploy** (proof #1 above).
+- **Perf gate:** two config-gated harnesses (`perf.overhead_p95_ms: 10.0`,
+  `perf.http_transport_overhead_p95_ms: 5.0`) — **re-run on Linux/SSD CI** (both numbers are
+  Windows-dev-box) and **after the WAL slice**. Run-on-demand (documented).
+- **Cost watch:** still **$0** (no LLM path); LLM cost monitoring **begins at M2** (Claude Haiku,
+  writes-only, cached) — set a per-write cost target as an M2 exit criterion.
+
+#### 6. Reusable learning harvested (toolkit)
+- **Graduating to `/eval` (the budget-*checking* side):** *"When you re-measure an aspirational
+  overhead/latency budget, gate the **isolated** layer's delta — not the end-to-end number a noisy carried
+  baseline (fsync tail, GC) swamps; a negative or wildly variable p95 is the tell you're measuring noise,
+  not the layer. And don't certify a single-digit-ms budget on a shared/dev box — re-measure on a dedicated
+  target before quoting a canonical number."* Complements last cycle's `/architect` rule (set the budget
+  aspirational + re-measure) by saying **how** to re-measure cleanly. **Patched into
+  `product-playbook/commands/eval.md` + installed copy synced.**
+- **Confirmed (not re-harvested):** last cycle's `/architect` budget rule is in place and **paid off** this
+  cycle (the aspirational framing turned a p95 miss into a flagged, gated outcome). Confirmation, not a new
+  graduate.
+- **Process fix re-applied:** verified the M2 reminder **against the actual scheduler** again this cycle
+  (the recurring honesty discipline) — it exists, enabled, fires 2026-08-08.
+
+**Cycle confidence: 85%** (matches the M3 `/eval`).
+- **Solid:** north-star **held over the new HTTP+OIDC surfaces** (100%/0-bypass, OIDC fail-closed on real
+  RS256 JWTs), 181/181 + 0 op-failures, all CI-gated; next move is **verification-first + evidence-backed**;
+  the M1 harvest **demonstrably worked**.
+- **Risky/partial (honest):** **3 cloud proofs unmeasurable in-env** (guides ready, user-action) → **M3
+  exit gate partial-by-construction**; HTTP p95 misses the aspiration on noisy hardware (re-measure
+  pending); carried fsync miss + evasion gap stay open until WAL/M2.
+- **To raise it:** user completes the 3 cloud proofs (closes the gate **+ yields the first real
+  network-operator signal**); re-measure both harnesses on Linux/SSD; land WAL + M2.
 
 ## Drift log
 
