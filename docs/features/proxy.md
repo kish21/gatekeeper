@@ -9,12 +9,17 @@ original names**, and routes each call through the governance pipeline before fo
 real upstream and relaying the untouched result back. Every call is recorded in the tamper-evident
 ledger built in M1 — so this slice is what actually *feeds the wedge*.
 
-```
-agent ──stdio──▶ gatekeeper serve ──stdio──▶ demo_file_server (real MCP server)
-                     │
-        pipeline:  identity ▶ classify ▶ AUDIT(decision) ▶ forward ▶ AUDIT(outcome)
-                   (fail-closed)          ↑ before act (ADR-003)        ↓
-                                          tamper-evident ledger (HMAC hash-chain)
+```mermaid
+flowchart LR
+    A(["agent"]) -->|"stdio · MCP"| GK
+    subgraph GK["gatekeeper serve — GatewayPipeline (PEP · fail-closed)"]
+        direction TB
+        ID["identity"] --> CL["classify<br/>read / write"] --> AUD["AUDIT decision<br/>before act (ADR-003)"] --> FWD["forward"] --> OUT["AUDIT outcome"]
+    end
+    FWD -->|"stdio · MCP"| UP(["demo_file_server<br/>(real MCP server)"])
+    UP -->|"untouched result"| A
+    AUD -.-> LED[("tamper-evident ledger<br/>(HMAC hash-chain)")]
+    OUT -.-> LED
 ```
 
 ## Contract (in/out)

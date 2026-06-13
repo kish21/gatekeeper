@@ -17,6 +17,22 @@ M1.4 is the slice that proves the product's tool-agnostic promise and finishes t
    **logged and skipped** instead of crashing the whole gateway — essential once "add any server by
    config" is real (a typo in one entry must not take governance down for the others).
 
+```mermaid
+flowchart LR
+    subgraph cfg["Config + .env only — no gateway code"]
+        direction TB
+        UP["config/upstreams.yaml<br/>name · command · reads/writes"]
+        POLF["policies/gatekeeper.cedar<br/>role-based rules"]
+        ENV[".env<br/>{ from_env: TOKEN }"]
+    end
+    cfg --> GK["GateKeeperAI pipeline<br/>(src/ unchanged)"]
+    GK --> A(["demo_file_server"])
+    GK --> B(["mcp-server-time<br/>real 3rd-party · zero code"])
+    GK --> C(["your MCP server<br/>add one YAML block"])
+    BAD(["bad / offline upstream"]):::bad -.->|"logged + skipped, never fatal"| GK
+    classDef bad fill:#fdecea,stroke:#c0392b
+```
+
 ## Contract (in/out)
 - **`config/upstreams.yaml`** is the registry. Each entry: `name`, `transport` (`stdio`), `command`
   (how to launch), and optional `reads`/`writes` annotations that drive read/write classification.

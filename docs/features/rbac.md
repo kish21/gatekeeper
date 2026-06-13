@@ -11,13 +11,20 @@ deny with a human-readable reason**; a denied call is recorded and **never forwa
 an allowed call proceeds exactly as before. RBAC rules live entirely in the `.cedar` file — **zero
 authorization logic is hardcoded** — so who-may-call-what is changed by editing config, not code.
 
-```
-agent ──stdio──▶ gatekeeper serve ──stdio──▶ upstream MCP server
-                     │
-   pipeline:  identity ▶ classify ▶ POLICY(Cedar) ▶ AUDIT(decision) ▶ forward ▶ AUDIT(outcome)
-              (fail-closed)          allow/deny+reason   ↑ before act (ADR-003)
-                                     default = DENY       tamper-evident ledger (HMAC chain)
-              on DENY: record the deny ─────────────────▶ raise PolicyDenied (no forward)
+```mermaid
+flowchart TB
+    subgraph REQ["Cedar request (built per call)"]
+        direction LR
+        P["principal<br/>User in Role"]
+        AC["action<br/>read | write"]
+        RS["resource<br/>Tool · upstream::tool"]
+    end
+    REQ --> CED{"Cedar policy<br/>policies/gatekeeper.cedar<br/>default = DENY"}
+    CED -->|"admin / operator → any tool"| ALLOW["ALLOW<br/>recorded, then forwarded"]:::ok
+    CED -->|"readonly → read actions only"| ALLOW
+    CED -->|"readonly write · unknown role/action · engine error"| DENY["DENY + reason<br/>recorded, raise PolicyDenied,<br/>never forwarded"]:::bad
+    classDef ok fill:#eafaf1,stroke:#27ae60
+    classDef bad fill:#fdecea,stroke:#c0392b
 ```
 
 ## Cedar request model
