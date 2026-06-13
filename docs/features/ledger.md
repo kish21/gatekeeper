@@ -13,6 +13,22 @@ append(e):  prev = last.entry_hash (or GENESIS)
 verify():   walk seq ascending; recompute each entry_hash; check prev_hash linkage
 ```
 
+```mermaid
+flowchart LR
+    G(["GENESIS"]) --> E1
+    subgraph chain["Append-only · each hash binds the previous one"]
+        direction LR
+        E1["seq 1<br/>entry_hash = HMAC(key, prev + json)"] --> E2["seq 2"] --> E3["seq 3"]
+    end
+    E3 --> HEAD["head hash<br/>(verify prints it — pin out-of-band)"]
+    T["tamper at seq 2<br/>edit · insert · delete · reorder · wrong key"]:::bad -.-> E2
+    V["gatekeeper verify<br/>recompute every hash + check linkage"] --> R{"chain intact?"}
+    R -->|"yes"| OK["exit 0 · OK ledger intact"]:::ok
+    R -->|"no"| FAIL["exit 1 · TAMPERED broken at seq=2"]:::bad
+    classDef bad fill:#fdecea,stroke:#c0392b
+    classDef ok fill:#eafaf1,stroke:#27ae60
+```
+
 ## Contract (in/out)
 - **Port:** `ports.ledger.LedgerStore` → `append`, `read`, `get`, `verify`.
 - **Types:** `schemas.ledger.LedgerEntry` (in/out), `VerifyResult` (verify out). `prev_hash`/`entry_hash`

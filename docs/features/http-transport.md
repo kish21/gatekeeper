@@ -15,6 +15,19 @@ tamper-evident ledger as stdio. `gatekeeper serve --transport http` (or `transpo
 the process; HTTP reads `Authorization: Bearer <token>` **per request**, so many principals share
 one gateway, each call resolved + recorded under its own caller (ADR-008).
 
+```mermaid
+flowchart TB
+    S1(["stdio agent<br/>1 token at boot"]) --> STDIO["stdio_server.py<br/>(thin binding)"]
+    H1(["HTTP agent A<br/>Bearer per request"]) --> HTTP
+    H2(["HTTP agent B<br/>Bearer per request"]) --> HTTP["http_server.py<br/>(thin binding · extracts bearer)"]
+    STDIO --> SURF
+    HTTP --> SURF
+    SURF["transport/surface.py<br/>ONE governed surface — no transport drift"] --> PIPE["GatewayPipeline (PEP)<br/>identity → policy → audit → forward"]
+    PIPE --> LED[("one tamper-evident ledger<br/>single-writer · 1 worker (ADR-007)")]
+    classDef x fill:#eef2ff,stroke:#6677aa
+    class SURF,PIPE x
+```
+
 ## How it holds the invariants
 
 | Invariant | How |

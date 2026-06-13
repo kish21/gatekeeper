@@ -17,6 +17,16 @@ decision:
 A row whose `deny` is tampered to `allow` will still *display* via `show`, but `verify` flags the chain as
 broken at that `seq` — the forgery cannot hide.
 
+```mermaid
+flowchart LR
+    ROW["recorded decision<br/>seq 2 · deny"] --> TAM["attacker flips<br/>deny → allow"]:::bad
+    TAM --> SHOW["gatekeeper show &lt;call_id&gt;<br/>still DISPLAYS the (altered) row"]
+    TAM --> VER["gatekeeper verify<br/>recomputes the hash chain"]
+    VER --> CAUGHT["TAMPERED broken at seq=2<br/>— the forgery cannot hide"]:::ok
+    classDef bad fill:#fdecea,stroke:#c0392b
+    classDef ok fill:#eafaf1,stroke:#27ae60
+```
+
 ## Contract (in/out)
 - **Reuses** the existing typed `ports.ledger.LedgerStore` — `verify() -> VerifyResult`, `get(call_id) -> LedgerEntry | None`.
   No new port method was added.

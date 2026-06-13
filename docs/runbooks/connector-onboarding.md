@@ -5,6 +5,23 @@
 > governed (authenticated · RBAC · tamper-evident audit) using **config + `.env` only, zero code**.
 > Time budget: **< 10 minutes** (the locked north-star secondary).
 
+## At a glance
+
+```mermaid
+flowchart TB
+    S1["1 · Service mapping<br/>name · command · creds · read/write tools"] --> S2["2 · Register in upstreams.yaml"]
+    S2 --> Q{"needs a credential?"}
+    Q -->|"yes"| ENVSET["set TOKEN in .env<br/>(unset → fail-closed: refuses to start)"]
+    Q -->|"no"| S3
+    ENVSET --> S3{"need rules tighter<br/>than role-based?"}
+    S3 -->|"no (usual case)"| S4
+    S3 -->|"yes"| CED["3 · add a Cedar forbid rule"]
+    CED --> S4["4 · Restart + verify the path<br/>tail (allow + deny) · verify · stats"]
+    S4 --> S5["5 · Record the SLA row"]
+    classDef x fill:#eef2ff,stroke:#6677aa
+    class S1,S2,S4,S5 x
+```
+
 ## Prerequisites
 
 - A running gateway (`gatekeeper serve`, any transport) or the container ([deploy guide](../deploy/azure-container-apps.md)).

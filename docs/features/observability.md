@@ -12,6 +12,20 @@
 | **`gatekeeper stats`** (any transport) | calls · allowed/denied counts + rates · denies by principal · busiest tools · time window — each call counted **once** (its decision entry) | the **ledger** (authoritative history; pair with `verify` to prove it untampered) |
 | **Alert hook** (`GATEKEEPER_ALERT_WEBHOOK` in `.env`) | one JSON POST on **`verify_failure`** (CLI found tampering — the signal this product exists for) and on **`deny_spike`** (≥ `observability.deny_spike.threshold` denies inside `window_s`; one alert per breach episode, re-arms when the window drains) | `verify` CLI + the pipeline via [infra/alerts.py](../../src/gatekeeper/infra/alerts.py) |
 
+```mermaid
+flowchart LR
+    PIPE["GatewayPipeline<br/>records each call"] --> MET["in-process metrics<br/>infra/metrics.py"]
+    PIPE --> LEDG[("ledger<br/>durable history")]
+    MET --> PROM["GET /metrics (Prometheus text)<br/>calls · deny_rate · overhead_p95 vs budget"]
+    PROM --> SCRAPE(["Prometheus / Grafana /<br/>Azure Monitor"])
+    LEDG --> STATS["gatekeeper stats<br/>calls · allow/deny · busiest tools"]
+    PIPE -->|"deny spike"| AL
+    VER["gatekeeper verify"] -->|"verify_failure"| AL
+    AL["fail-SAFE webhook<br/>(off the hot path · never blocks a call)"] --> SLACK(["Slack / SIEM"])
+    class AL note
+    classDef note fill:#fff8e1,stroke:#cc9900
+```
+
 **Design decisions (mini-architect, benchmarked 2026):**
 - **No new dependency.** The exposition format is the stable Prometheus text format — both a
   `curl`-ing operator and a real Prometheus/Grafana/Azure-Monitor scraper read it. A

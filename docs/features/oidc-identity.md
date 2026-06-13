@@ -31,6 +31,22 @@ Rejected: python-jose (maintenance/CVE history), authlib (heavier, no added valu
 
 ## Fail-closed matrix (every row asserted by a unit test, real RS256 tokens)
 
+```mermaid
+flowchart TB
+    JWT(["Bearer JWT<br/>per request (ADR-008)"]) --> SIG{"signature valid?<br/>JWKS · asymmetric only<br/>(HS* / none rejected)"}
+    SIG -->|"no"| D["IdentityError →<br/>ledgered DENY (&lt;unauthenticated&gt;)<br/>token never echoed"]:::bad
+    SIG -->|"yes"| CLAIMS{"exp · aud · iss ok?"}
+    CLAIMS -->|"no"| D
+    CLAIMS -->|"yes"| GRP{"group in group_role_map?"}
+    GRP -->|"no / missing / malformed"| D
+    GRP -->|"yes"| OK["Principal = sub + role<br/>→ pipeline (Cedar next)"]:::ok
+    JWKSOUT(["JWKS outage · any exception"]):::bad -.->|"fail closed — never bypass"| D
+    classDef ok fill:#eafaf1,stroke:#27ae60
+    classDef bad fill:#fdecea,stroke:#c0392b
+```
+
+> **No default role, ever** — authenticated ≠ authorized. Every failure branch ends in a ledgered deny.
+
 | Attack / failure | Outcome |
 |---|---|
 | Expired token · wrong audience · wrong issuer · missing `exp` | `IdentityError` (pipeline ledgers the deny) |

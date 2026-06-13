@@ -13,6 +13,19 @@
 | **Ledger on a persistent volume** | the audit chain must outlive any replica | Azure Files mount at `/data` |
 | **Real identity for real exposure** | a hosted gateway is beyond loopback ⇒ the ADR-006 bearer-replay threat is LIVE. The image's default `static_token` demo tokens are for a smoke test only — switch to **OIDC** ([feature doc](../features/oidc-identity.md)) before pointing anything real at it. | you — step 7 |
 
+```mermaid
+flowchart LR
+    AG(["Local agent /<br/>MCP host"]) -->|"HTTPS · Bearer (OIDC)"| ING
+    subgraph azure["Azure Container Apps"]
+        direction TB
+        ING["Ingress — TLS terminates here<br/>(ADR-009)"] --> APP["gatekeeper container<br/>1 replica = single ledger writer (ADR-007)<br/>:8765 → /mcp + /healthz"]
+        APP --> VOL[("Azure Files /data<br/>tamper-evident ledger — persists across restarts")]
+    end
+    SEC["Secrets via env only<br/>HMAC key · no secret in image"]:::note -.-> APP
+    IDP(["Entra ID / OIDC"]):::note -.->|"validate token (JWKS)"| APP
+    classDef note fill:#fff8e1,stroke:#cc9900
+```
+
 ## Steps (resource names are examples; pick your own)
 
 ```bash

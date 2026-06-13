@@ -21,11 +21,25 @@ control or failing an audit.
 
 ## How it works
 
-```
- Agent ──MCP──▶ GateKeeperAI ──MCP──▶ any upstream MCP server
-                    │
-   identity ▶ policy(Cedar) ▶ [M2: risk(LLM) ▶ human approval] ▶ audit-write ▶ forward
-                                                                  (fail-closed, audit-before-act)
+```mermaid
+flowchart LR
+    A(["AI agent"]) -->|"MCP call + bearer token"| ID
+    subgraph GK["GateKeeperAI — one governed pipeline (fail-closed)"]
+        direction TB
+        ID["1 · Identity<br/>token → principal + role"] --> POL{"2 · Policy · Cedar<br/>allow or deny?"}
+        POL -->|"allow"| AUD["3 · Audit decision<br/>before forward (ADR-003)"]
+        POL -->|"deny + reason"| DENY["3 · Audit the deny"]
+        AUD --> FWD["4 · Forward"]
+        FWD --> OUT["5 · Audit outcome"]
+        M2["M2 roadmap: LLM risk-score<br/>→ human approval (writes only)"]:::soon -.-> AUD
+    end
+    FWD -->|"MCP"| UP(["Any upstream MCP server"])
+    UP -->|"untouched result"| A
+    DENY -->|"blocked: reason"| A
+    AUD -.-> LED[("Tamper-evident<br/>hash-chained ledger")]
+    DENY -.-> LED
+    OUT -.-> LED
+    classDef soon fill:#fff8e1,stroke:#cc9900,stroke-dasharray: 5 5
 ```
 
 - **Authenticated** — every call resolves to a principal + role (`IdentityResolver`).
@@ -34,6 +48,31 @@ control or failing an audit.
 - **Provably logged** — append-only, keyed-HMAC hash-chained ledger; `gatekeeper verify` proves
   no record was altered, inserted, or removed.
 - **Tool-agnostic** — govern any MCP server by editing `config/upstreams.yaml`. Zero code per server.
+
+### Architecture at a glance
+
+Ports-&-adapters (hexagonal): the pipeline is the policy-enforcement core; every external is an
+interface with a config-selected adapter, and dependencies point **inward**. (Full ADRs in
+[`PRODUCT.md`](PRODUCT.md#architecture).)
+
+```mermaid
+flowchart TB
+    AGENT(["AI agent"]) -->|"MCP · stdio / HTTP"| T["Transport<br/>(no business logic)"]
+    T --> PIPE
+    subgraph core["Gateway pipeline — the PEP"]
+        PIPE["identity → policy → (M2: risk → approval) → audit → forward"]
+    end
+    PIPE --> IR["IdentityResolver"]
+    PIPE --> PE["PolicyEngine"]
+    PIPE --> LS["LedgerStore"]
+    PIPE --> UC["UpstreamClient"]
+    IR -.-> IRA["static token · OIDC"]
+    PE -.-> PEA["Cedar policy-as-code"]
+    LS -.-> LSA["SQLite + keyed-HMAC chain"]
+    UC -.-> UCA["MCP client → real servers"]
+    classDef port fill:#eef2ff,stroke:#6677aa
+    class IR,PE,LS,UC port
+```
 
 ## See it in 30 seconds
 
@@ -118,8 +157,9 @@ Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan,
 
 | Milestone | Scope | State |
 |---|---|---|
-| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | **M1.1 ✅** transparent proxy · **M1.2 ✅** identity + RBAC (Cedar) · **M1.3 ✅** tamper-evidence + `verify`/`show` · **M1.4 ✅** config-driven any-server (real 3rd-party server governed, zero code) + `seed-demo` · **M1 exit gate (`/dev-check`) next** |
-| **M2** | LLM risk-scoring + human write-approval | planned |
+| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | ✅ **complete** — M1.1–M1.4 shipped, `/dev-check` passed, evaluated (coverage 100% / 0 bypass) |
+| **M3** | enterprise deployment readiness (HTTP transport · OIDC identity · container + Azure · observability · connector runbook) | ✅ **built + evaluated** — pulled in on fired enterprise-requirements triggers. 3 live-cloud proofs (real Entra token · Azure run · credentialed connector) are operator actions; copy-paste guides shipped |
+| **M2** | LLM risk-scoring + human write-approval | planned — deliberately time-boxed (~2026-08-08) |
 
 ## License
 
