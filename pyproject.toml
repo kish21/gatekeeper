@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # M2 AI layer — install only when building risk-scoring. Keeps M1 lean.
-ai = ["anthropic>=0.107.1"]
+ai = ["anthropic>=0.109.1"]
 # Demo governed targets — real, third-party MCP servers used to prove "govern ANY server, zero code"
 # (M1.4). NOT a gateway runtime dependency: it is a server GateKeeper governs, registered purely in
 # config/upstreams.yaml. Install with `pip install -e ".[demo]"`.
