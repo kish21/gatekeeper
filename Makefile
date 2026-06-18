@@ -16,6 +16,10 @@ install: ## Install deps (prod+dev) and git hooks
 demo: ## Play the 5-beat governance story end-to-end (no setup; hermetic, throwaway ledger)
 	$(PY) -m scripts.demo
 
+.PHONY: demo-enterprise
+demo-enterprise: ## Play the ENTERPRISE story: governed over HTTP with real-login (OIDC), hermetic
+	$(PY) -m scripts.demo_enterprise
+
 .PHONY: serve
 serve: ## Run the gateway (MCP transport, from config/)
 	$(PY) -m gatekeeper.cli.app serve

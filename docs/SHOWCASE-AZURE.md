@@ -78,9 +78,14 @@ then forwards the call to the actual tool. A denied or tampered call is caught a
 A short, repeatable tour. Each beat is **what you do · what you say · what they see**. The story is identical
 whether you run it locally or against the hosted Azure gateway — only the address changes.
 
+> **Two one-command demos run the whole story locally, no setup:**
+> `make demo` (the local stdio story) and **`make demo-enterprise`** (the hosted shape — governed over
+> **HTTP** with a **real login / OIDC**, a local fake IdP standing in for Entra/Okta). Both are hermetic
+> (throwaway ledger, removed on exit).
+
 > **Availability today** is marked on each beat:
-> 🟢 **runs now** via `make demo` (local) · 🔵 **needs the local enterprise demo** (HTTP + login, in progress) ·
-> 🟣 **needs the live Azure URL** (one-time deploy — see the honesty note below).
+> 🟢 **runs now** via `make demo` (local stdio) · 🔵 **runs now** via `make demo-enterprise` (HTTP + real
+> login/OIDC, local) · 🟣 **needs the live Azure URL** (one-time deploy — see the honesty note below).
 
 **Beat 1 — A normal request goes through, and is recorded. 🟢🟣**
 - *Do:* point an AI agent at the gateway and have it **read** something (a file, an issue).
