@@ -3,6 +3,20 @@
 > The container is **cloud-neutral** ([Dockerfile](../../Dockerfile)); this guide is the Azure-first
 > proof path. A GCP (Cloud Run) guide is an optional follow-up slice — same image, no code change.
 
+## Fastest path: the one-shot script
+
+After `az login`, the whole sequence below is also an **idempotent script** — run it from the repo root:
+
+```bash
+bash scripts/deploy_azure.sh        # ACR build -> env -> Azure Files ledger -> 1-replica deploy -> /healthz
+```
+
+It preflight-checks your login, creates billable resources on your **current** subscription (override
+names via `GK_RG`, `GK_LOCATION`, … env vars), sets the HMAC key **once** (re-runs keep it so the
+ledger stays verifiable), mounts the ledger volume, and waits for `/healthz`. It then prints the live
+URL and the "make it real" follow-ups (allow-list the FQDN + switch to OIDC, step 8 below). The manual
+steps below explain what it does, step by step.
+
 ## Posture (what the ADRs require of ANY deployment)
 
 | Rule | Why | Enforced by |
