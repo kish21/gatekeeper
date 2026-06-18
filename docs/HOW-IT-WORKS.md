@@ -158,13 +158,19 @@ Be precise with customers — don't oversell:
 | Govern any tool by settings, zero code | ✅ Works today |
 | One bad/offline tool doesn't take the guard down | ✅ Works today |
 | Securely give a tool its password from `.env` (e.g. a GitHub token) | ✅ Works today |
+| Run **over the network** so a whole team shares one gateway (not one laptop) | ✅ Works today (HTTPS added by Azure when you deploy — guide ready) |
+| **Enterprise login** (OIDC — Entra ID / Okta / Google) instead of static badges | ✅ Works today (plug in your tenant by config) |
+| **Live health metrics + tamper / deny alerts** | ✅ Works today |
 | **A human approves risky writes before they happen** | 🔜 Coming (next milestone) |
 | **AI risk-scores each action to decide what needs approval** | 🔜 Coming (next milestone) |
-| Enterprise login (OIDC / Okta) instead of static badges | 🔜 Coming |
 
 > Today, an **operator's** writes go straight through (and are fully logged). The *human-approval
 > step* for risky writes is the **next milestone** — so don't claim "every write needs sign-off"
 > yet. A **read-only** badge is already blocked from writing, today.
+
+> **Showing the enterprise version?** The hosted story — HTTPS, your real corporate login, and Azure —
+> has its own plain-English guide with a "what to show on a call" demo script:
+> [SHOWCASE-AZURE.md](SHOWCASE-AZURE.md).
 
 ---
 
