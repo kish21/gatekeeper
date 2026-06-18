@@ -155,6 +155,9 @@ secret value stays in `.env` and never lands in YAML — fail-closed if it's uns
 Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan, and architecture
 (ADRs included), and [`STRUCTURE.md`](STRUCTURE.md) for the codebase map.
 
+**Plain-English guides (no code):** [How it works](docs/HOW-IT-WORKS.md) (the local "guard" story) ·
+[GateKeeper on Azure](docs/SHOWCASE-AZURE.md) (the hosted/enterprise story + a "what to show a customer" demo script).
+
 | Milestone | Scope | State |
 |---|---|---|
 | **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | ✅ **complete** — M1.1–M1.4 shipped, `/dev-check` passed, evaluated (coverage 100% / 0 bypass) |
