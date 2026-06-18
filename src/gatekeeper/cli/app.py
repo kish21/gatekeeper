@@ -136,7 +136,13 @@ def serve(
 
 
 @app.command()
-def tail(limit: int = 20, principal: str | None = None) -> None:
+def tail(
+    limit: int = 20,
+    principal: str | None = None,
+    with_id: bool = typer.Option(
+        False, "--with-id", help="Add a call_id column (the natural key for `show <call_id>`)."
+    ),
+) -> None:
     """Tail the audit ledger (most recent shown last)."""
     configure_logging(get_settings().log_level)
     with _opened_ledger() as store:
@@ -145,10 +151,19 @@ def tail(limit: int = 20, principal: str | None = None) -> None:
         _console.print("(ledger is empty)")
         return
     table = Table(title="audit ledger (recent)", box=box.ASCII)
-    for col in ("seq", "ts", "principal", "tool", "verdict"):
+    # call_id leads when shown: it's the key the operator copies into `show`.
+    columns = (
+        ("seq", "call_id", "ts", "principal", "tool", "verdict")
+        if with_id
+        else ("seq", "ts", "principal", "tool", "verdict")
+    )
+    for col in columns:
         table.add_column(col)
     for e in reversed(entries):  # oldest -> newest
-        table.add_row(str(e.seq), e.ts, e.principal, f"{e.upstream}:{e.tool}", str(e.verdict))
+        row = [str(e.seq), e.ts, e.principal, f"{e.upstream}:{e.tool}", str(e.verdict)]
+        if with_id:
+            row.insert(1, e.call_id)
+        table.add_row(*row)
     _console.print(table)
 
 
