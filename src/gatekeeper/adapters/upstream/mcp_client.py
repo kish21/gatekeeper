@@ -131,9 +131,26 @@ class UpstreamSpec:
         return StdioServerParameters(
             command=_resolve_launcher(self.command[0]),
             args=list(self.command[1:]),
-            env=dict(self.env) if self.env else None,
+            env=self._child_env(),
             cwd=self.cwd,
         )
+
+    def _child_env(self) -> dict[str, str]:
+        """Environment for the upstream subprocess.
+
+        The MCP SDK's default stdio environment is a scrubbed allowlist that, under an MCP host on
+        Windows, can omit vars a child interpreter needs to even start (e.g. ``SystemRoot``) — so a
+        config-declared ``python -m ...`` upstream fails to spawn and its tools silently never
+        appear (``upstream unavailable; skipping``). Inherit the gateway's own process environment
+        so upstreams launch reliably regardless of host, then overlay the upstream's configured env
+        (incl. resolved ``{from_env}`` secrets). The gateway's OWN secrets (``GATEKEEPER_*`` — the
+        ledger HMAC key, the agent token) are stripped first, so a governed upstream never inherits
+        them (least privilege; only its own declared credentials reach it).
+        """
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GATEKEEPER_")}
+        if self.env:
+            env.update(self.env)
+        return env
 
 
 def _summarize(result: types.CallToolResult) -> str:
