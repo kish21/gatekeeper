@@ -12,7 +12,7 @@ keywords = ["mcp", "model-context-protocol", "governance", "gateway", "rbac", "a
 dependencies = [
   "mcp",                 # official Model Context Protocol SDK (server + client)
   "pydantic>=2.13.4",         # typed contracts / DTOs
-  "pydantic-settings>=2.14.1",# .env-driven settings (no hardcoding)
+  "pydantic-settings>=2.14.2",# .env-driven settings (no hardcoding)
   "python-dotenv>=1.2.2",    # read .env values for upstream credential refs ({from_env: NAME})
   "pyyaml>=6.0.3",           # YAML config loader
   "typer>=0.26.7",         # operator CLI
