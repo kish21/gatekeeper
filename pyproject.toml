@@ -20,7 +20,7 @@ dependencies = [
   "fastapi>=0.137.0",      # HTTP MCP transport + (M2) approval API
   "uvicorn[standard]>=0.49.0",
   "httpx>=0.28.1",         # async HTTP for upstream/LLM
-  "sqlalchemy>=2.0.50",       # ledger persistence
+  "sqlalchemy>=2.0.51",       # ledger persistence
   "alembic>=1.18.4",       # DB migrations (never hand-edit schema)
   "cedarpy",             # Cedar policy engine (policy-as-code, analyzable)
   "PyJWT[crypto]>=2.13.0",   # OIDC identity adapter (M3.2): JWKS signature/aud/exp validation
