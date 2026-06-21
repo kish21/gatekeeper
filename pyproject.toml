@@ -37,12 +37,12 @@ demo = ["mcp-server-time>=2026.6.4"]
 [dependency-groups]
 # Dev/test tooling — NOT shipped to prod.
 dev = [
-  "pytest>=9.1.0",
+  "pytest>=9.1.1",
   "pytest-asyncio>=1.4.0",
   "pytest-cov>=7.1.0",
   "pytest-timeout>=2.4.0",   # a hung async test must FAIL with stacks, never wedge CI
 
-  "ruff>=0.15.17",
+  "ruff>=0.15.18",
   "mypy>=2.1.0",
   "types-PyYAML",
   "pip-audit>=2.10.1",
