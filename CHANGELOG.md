@@ -5,7 +5,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+### Fixed
+- **First live Azure run (2026-08-24) — five defects in the deploy path**, none reachable by review:
+  - `az acr build` log streaming crashed the CLI on a Windows cp1252 console
+    (`UnicodeEncodeError` in colorama) while the server-side build kept running → build is now
+    queued with `--no-logs` and **polled to completion**, so a failed build still stops the deploy.
+  - `az storage share-rm create` was missing `-g` → `argument 'resource_group' is not defined`.
+  - Deploys pushed `:latest` and updated to `:latest`; Container Apps compares image references,
+    saw no change, and **silently kept the old revision** → each build now gets a unique timestamp
+    tag (`:latest` still pushed as the human pointer).
+  - The documented `http_allowed_hosts: ["<fqdn>:*"]` form **can never match a real request**: the
+    SDK's `:*` pattern requires a port in the Host header, and `:443` traffic sends none. Every
+    `/mcp` call 421'd. Guide, container config, script hint and runbook now say to list the FQDN
+    **bare and with `:*`**.
+  - Rolling updates put **two writers on the single-writer ledger** (ADR-007): the new revision died
+    in `alembic upgrade head` with `database is locked` while the old one served a stale config.
+    The deploy is now **stop-then-start** (old revision deactivated + drained first), and the
+    container entrypoint retries a locked migration for ~60 s before failing loud.
+
+### Known issues
+- **The ledger does NOT persist on Azure Files (SMB)** — measured 2026-08-24 on a live deployment:
+  `audit.db` stayed 0 bytes while governed calls were served, a second process reported
+  `Ledger table not found`, and a restart lost every record. SQLite needs POSIX locking + honest
+  `fsync`, which SMB does not provide. M3.3's *"ledger on persistent storage; `verify` clean"*
+  clause is **failed, not pending**; the governance path itself measured clean. Candidate fixes
+  (Azure Files NFS · managed disk · Postgres ledger) are recorded in
+  `docs/deploy/azure-container-apps.md`.
+
 ### Added
+- **Hosted-deploy acceptance kit:** `scripts/probe_hosted.py` (drives a real hosted gateway from
+  outside the cloud: governed list, operator ALLOW, RBAC DENY, identity DENY, `/metrics`; keeps
+  `allowed`/`denied`/`error` **distinct** so a transport failure can never score as a passing deny)
+  and `docs/runbooks/verify-hosted-deploy.md` (nine checks, plain-language, with the first live
+  run's results recorded).
 - **HTTP transport (M3.1):** MCP Streamable HTTP binding of the same governed pipeline —
   shared proxy-surface builder (stdio/HTTP cannot drift), FastAPI+uvicorn single worker
   (ADR-007), per-request `Authorization: Bearer` resolved + recorded in the pipeline
