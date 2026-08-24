@@ -19,7 +19,12 @@ transport:
   http_path: /mcp
   http_allow_non_loopback: true    # ADR-009 ack: containerized; TLS + exposure at the ingress
   http_allowed_origins: []         # browser cross-site requests stay refused
-  http_allowed_hosts: []           # ADD your public FQDN here when hosted: ["<fqdn>:*"]
+  http_allowed_hosts:              # ADD your public FQDN here when hosted. List it BARE (no port)
+                                   # AND with ":*" — the SDK's ":*" pattern only matches a Host
+                                   # header that CARRIES a port, and a request to an HTTPS ingress
+                                   # on :443 sends the host with no port at all. Bare-only would
+                                   # miss non-standard ports; ":*"-only 421s every real request.
+    []                             # e.g. ["gw.example.com", "gw.example.com:*"]
                                    # (without it, /mcp refuses unknown Host headers with 421)
 
 adapters:
