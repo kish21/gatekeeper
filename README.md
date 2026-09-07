@@ -155,7 +155,8 @@ secret value stays in `.env` and never lands in YAML — fail-closed if it's uns
 Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan, and architecture
 (ADRs included), and [`STRUCTURE.md`](STRUCTURE.md) for the codebase map.
 
-**Plain-English guides (no code):** [How it works](docs/HOW-IT-WORKS.md) (the local "guard" story) ·
+**Plain-English guides (no code):** [The use case, as a story](docs/USE-CASE-STORY.md) (start here if GateKeeper is new to you) ·
+[How it works](docs/HOW-IT-WORKS.md) (the local "guard" story) ·
 [GateKeeper on Azure](docs/SHOWCASE-AZURE.md) (the hosted/enterprise story + a "what to show a customer" demo script).
 
 | Milestone | Scope | State |
