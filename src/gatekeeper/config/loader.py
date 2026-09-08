@@ -65,6 +65,15 @@ class Settings(BaseSettings):
         default="",
         description="Operator alert webhook URL (Slack/Teams/PagerDuty-style). Empty = off.",
     )
+    approval_webhook: str = Field(
+        default="",
+        description="Where held writes are announced (Slack/Teams incoming webhook). Empty = fall "
+        "back to alert_webhook; both empty = nobody is told, and holds die of timeout.",
+    )
+    desk_url: str = Field(
+        default="",
+        description="Public URL of the desk, put into notifications so they are actionable.",
+    )
 
     # --- where things live ---------------------------------------------------------------------
     env: str = Field(default="dev")

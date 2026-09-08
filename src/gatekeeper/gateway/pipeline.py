@@ -42,6 +42,7 @@ from gatekeeper.domain.errors import ApprovalDenied, IdentityError, PolicyDenied
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.infra.logging import get_logger
 from gatekeeper.infra.metrics import GatewayMetrics, default_metrics
+from gatekeeper.infra.notify import ApprovalNotifier
 from gatekeeper.infra.tracing import ErrorReporter, default_reporter
 from gatekeeper.ports.approval import ApprovalQueue
 from gatekeeper.ports.identity import IdentityResolver
@@ -115,6 +116,7 @@ class GatewayPipeline:
         alerter: WebhookAlerter | None = None,
         approvals: ApprovalQueue | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        notifier: ApprovalNotifier | None = None,
     ) -> None:
         self._identity = identity
         self._classifier = classifier
@@ -129,6 +131,9 @@ class GatewayPipeline:
         self._alerter = alerter
         self._approvals = approvals
         self._approval_policy = approval_policy or ApprovalPolicy()
+        #: Tells people a write is waiting. Off by default; a hold without one still works, it
+        #: just relies on somebody watching the desk.
+        self._notifier = notifier or ApprovalNotifier()
         self._log = get_logger("gatekeeper.gateway")
 
     async def handle(
@@ -345,31 +350,39 @@ class GatewayPipeline:
                 "timeout_s": policy.timeout_s,
             },
         )
+        # Tell the approvers, off the hot path. A hold nobody hears about is a slow denial.
+        self._notifier.send(self._notifier.held(request, timeout_s=policy.timeout_s))
+
         loop = asyncio.get_running_loop()
         deadline = loop.time() + policy.timeout_s
         try:
             while True:
                 current = self._approvals.get(request.id)
                 if current is not None and current.is_final:
+                    self._notifier.send(self._notifier.decided(current))
                     return current
                 if loop.time() >= deadline:
-                    return self._approvals.decide(
+                    expired = self._approvals.decide(
                         request.id,
                         ApprovalStatus.EXPIRED,
                         by="gateway",
                         note=f"no decision within {policy.timeout_s:g}s",
                     )
+                    self._notifier.send(self._notifier.decided(expired))
+                    return expired
                 await asyncio.sleep(policy.poll_s)
         except asyncio.CancelledError:
             # The caller stopped waiting: a late approval must never execute a write nobody is
             # watching. Best-effort mark; if the request was decided meanwhile, keep that record.
             try:
-                self._approvals.decide(
+                cancelled = self._approvals.decide(
                     request.id,
                     ApprovalStatus.CANCELLED,
                     by="gateway",
                     note="caller disconnected while waiting",
                 )
+                # Close the loop in chat too, so an approver does not decide a dead request.
+                self._notifier.send(self._notifier.decided(cancelled))
             except Exception as exc:  # noqa: BLE001 — already decided or store gone
                 self._log.debug("could not mark request cancelled", extra={"error": str(exc)})
             raise

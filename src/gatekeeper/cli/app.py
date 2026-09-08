@@ -50,6 +50,7 @@ from gatekeeper.config.loader import (
 from gatekeeper.db.base import is_url, redact_url
 from gatekeeper.domain.approval_rules import approver_rules_from_config
 from gatekeeper.domain.errors import ApprovalRefused
+from gatekeeper.gateway.factory import DEFAULT_APPROVAL_TIMEOUT_S
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.schemas.approval import Approver
 from gatekeeper.schemas.enums import ApprovalStatus, ApproverMethod, Verdict
@@ -106,6 +107,32 @@ def _durability_check(config: dict[str, Any]) -> tuple[str, bool, str]:
             "lost when the container is replaced. Set GATEKEEPER_LEDGER_URL to a Postgres database",
         )
     return ("ledger durability", True, "sqlite file: fine for one machine (loopback only)")
+
+
+def _notification_check(config: dict[str, Any], settings: Settings) -> tuple[str, bool, str]:
+    """If writes are held for a person, is any person actually told?
+
+    On your own machine, watching the desk is a fair way to work, so this only reports. For a
+    gateway a team shares, it fails: an approver who is not told is an approver who does not
+    decide, and every held write then dies of timeout — a governance feature that silently
+    degrades into an outage is worse than one that is switched off on purpose.
+    """
+    approval = config["product"].get("approval") or {}
+    holds_writes = str(approval.get("writes", "off")).lower() == "require"
+    shared = bool(config["platform"].get("transport", {}).get("http_allow_non_loopback", False))
+    timeout = approval.get("timeout_s", DEFAULT_APPROVAL_TIMEOUT_S)
+    if not holds_writes:
+        return ("approval notifications", True, "not needed: writes are not held for a person")
+    if settings.approval_webhook or settings.alert_webhook:
+        where = settings.desk_url or "no GATEKEEPER_DESK_URL set: the message says what, not where"
+        return ("approval notifications", True, f"held writes are announced ({where})")
+    unheard = (
+        "nothing announces a held write, so somebody has to be watching the desk when it "
+        f"arrives or it is denied after {timeout}s. Set GATEKEEPER_APPROVAL_WEBHOOK"
+    )
+    if shared:
+        return ("approval notifications", False, unheard)
+    return ("approval notifications", True, f"watching the desk yourself is fine here; {unheard}")
 
 
 @contextmanager
@@ -325,6 +352,7 @@ def doctor(
         checks.append(("audit ledger", False, "skipped: no HMAC key"))
 
     checks.append(_durability_check(config))
+    checks.append(_notification_check(config, settings))
 
     try:
         from gatekeeper.adapters.policy.cedar import CedarPolicyEngine

@@ -22,6 +22,7 @@ from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.pipeline import ApprovalPolicy, GatewayPipeline
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
+from gatekeeper.infra.notify import notifier_from_settings
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
 
@@ -149,6 +150,7 @@ def build_pipeline(
         alerter=alerter,
         approvals=open_approvals(ledger) if approval_policy.writes_require else None,
         approval_policy=approval_policy,
+        notifier=notifier_from_settings(get_settings()),
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 
