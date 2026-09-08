@@ -37,7 +37,8 @@ def migrate(ledger_db_path: str) -> None:
 
 
 def _ensure_schema(engine: Engine, path: str) -> None:
-    if not inspect(engine).has_table("ledger_entry"):
+    inspector = inspect(engine)
+    if not all(inspector.has_table(t) for t in ("ledger_entry", "approval_request")):
         migrate(path)
 
 

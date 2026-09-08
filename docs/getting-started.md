@@ -67,11 +67,29 @@ into your MCP host, with absolute paths:
 The host launches `gatekeeper serve` for you. You do not run it by hand for normal use. The
 secrets stay in `.env` next to the config folder, so nothing sensitive goes into the host config.
 
-## 5. Look at the audit trail
+## 5. Approve or deny writes
+
+Reads go straight through. A write from an operator is held until someone decides:
+
+```bash
+gatekeeper pending                         # who wants to change what
+gatekeeper approve <id>                    # recorded under your name, then carried out
+gatekeeper deny <id> --reason "not yet"    # recorded, never carried out
+```
+
+No decision within the timeout (90 seconds by default, `approval.timeout_s` in
+`config/product.yaml`) counts as a deny. Roles listed under `exempt_roles` (admin by default)
+write without waiting. Set `approval.writes: off` to disable holding altogether.
+
+Without an assistant installed, `python -m scripts.agent write_file path=notes.txt content=hi`
+makes a write through the real gateway so you can practise the approval flow from two
+terminals. [One afternoon with GateKeeper](WALKTHROUGH.md) shows the whole exchange.
+
+## 6. Look at the audit trail
 
 ```bash
 gatekeeper tail --with-id     # the most recent calls, with each call's id
-gatekeeper show <call_id>     # who, what, verdict, reason, and the chain hashes for one call
+gatekeeper show <id>          # one call: who, what, each decision, outcome; a prefix is enough
 gatekeeper verify             # walks the whole chain; exit 0 means untampered
 gatekeeper stats              # allow and deny counts, busiest tools
 ```
@@ -90,8 +108,9 @@ records removed from its end is reported too.
 | `config/platform.yaml` | How the gateway runs: transport, identity adapter, ledger path. Every value has an environment variable next to it |
 | `.env` | Secrets and overrides. Created by `init`; never committed |
 
-You will not normally touch `config/product.yaml` (how a tool name is guessed to be a write when a
-server has no annotation) or anything under `src/`.
+`config/product.yaml` holds the approval rule (which writes wait, for how long, which roles are
+exempt) and how a tool name is guessed to be a write when a server has no annotation. You will not
+normally touch anything under `src/`.
 
 ## Governing a server that needs a credential
 

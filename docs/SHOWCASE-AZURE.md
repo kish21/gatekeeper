@@ -61,8 +61,8 @@ then forwards the call to the actual tool. A denied or tampered call is caught a
 ## Why a customer cares
 
 - **Agents now do real writes.** The moment an AI can create a ticket, merge a PR, or change a database, a
-  wrong or hijacked call has real blast radius. GateKeeper makes every write **authorised and recorded** —
-  and (next milestone) **human-approved**.
+  wrong or hijacked call has real blast radius. GateKeeper makes every write **authorised, held for a
+  named human, and recorded**.
 - **Audits need proof, not logs.** Plain logs can be edited. GateKeeper's audit trail is **hash-chained**, so
   you can *prove* no record was altered or removed — the wedge: *"don't trust the gateway, verify it."* That's
   what stands up to SOC2 / HIPAA / GDPR review.
@@ -142,7 +142,8 @@ Honesty keeps trust. Here's exactly where things stand:
 | Govern any tool by config (incl. credentialed) | ✅ Built — proven with a real third-party server |
 | Live `/metrics` + alerts | ✅ Built |
 | **Actually deployed on a live Azure subscription** | ✅ **Run live** (first run 2026-08-24). One command deploys it with fresh per-deployment tokens: [azure-container-apps.md](deploy/azure-container-apps.md). **Caveat:** the hosted ledger is not yet durable across a container restart (see the guide) |
-| Human approval of risky writes | 🔜 Next milestone (M2) |
+| Human approval of writes (`gatekeeper pending` / `approve` / `deny`, named + reasoned, timeout = no) | ✅ Built |
+| AI risk-scoring so only risky writes need a person | 🔜 Next milestone |
 
 **Before a *live-on-Azure* customer demo:** run `bash scripts/deploy_azure.sh` once on your subscription
 (about ten minutes) and use the probe command it prints. The same story also demos perfectly on a laptop —

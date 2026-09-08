@@ -26,7 +26,7 @@ from uuid import uuid4
 import mcp.types as types
 from mcp.server.lowlevel import Server
 
-from gatekeeper.domain.errors import IdentityError, PolicyDenied
+from gatekeeper.domain.errors import ApprovalDenied, IdentityError, PolicyDenied
 from gatekeeper.gateway.factory import GatewayRuntime
 from gatekeeper.infra.logging import get_logger
 
@@ -129,9 +129,9 @@ def build_proxy_server(
                 arguments=arguments,
                 call_id=call_id,
             )
-        except (IdentityError, PolicyDenied) as exc:
-            # Authn failure OR RBAC deny — both surface to the agent as an error; the call was
-            # already recorded by the pipeline and was never forwarded (fail-closed).
+        except (IdentityError, PolicyDenied, ApprovalDenied) as exc:
+            # Authn failure, RBAC deny, or a human said no — all surface to the agent as an
+            # error; the call was already recorded by the pipeline and was never forwarded.
             return _denied(exc)
         if isinstance(result.raw, types.CallToolResult):
             return result.raw  # transparent relay of the upstream's untouched result

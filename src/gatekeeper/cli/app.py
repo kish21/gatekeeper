@@ -7,10 +7,13 @@ gatekeeper tail      # tail the audit ledger
 gatekeeper verify    # prove the hash-chained ledger is intact
 gatekeeper show ID   # show the decision recorded for one call
 gatekeeper stats     # allow/deny counts from the ledger
+gatekeeper pending   # writes waiting for a human
+gatekeeper approve ID / deny ID   # decide one
 """
 
 from __future__ import annotations
 
+import getpass
 import importlib.util
 import json
 import os
@@ -26,8 +29,10 @@ from typing import Any
 import typer
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
+from gatekeeper.adapters.approval.sqlite import ApprovalStateError
 from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.config.loader import (
@@ -42,7 +47,7 @@ from gatekeeper.config.loader import (
     validate_security,
 )
 from gatekeeper.infra.logging import configure_logging, get_logger
-from gatekeeper.schemas.enums import Verdict
+from gatekeeper.schemas.enums import ApprovalStatus, Verdict
 
 app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
@@ -192,25 +197,38 @@ def init() -> None:
 
 # --- doctor -----------------------------------------------------------------------------------
 def _gatekeeper_executable() -> str:
-    """Absolute path of the ``gatekeeper`` command an MCP host should launch."""
-    found = shutil.which("gatekeeper")
-    if found:
-        return str(Path(found).resolve())
-    bin_dir = Path(sys.executable).resolve().parent
+    """Absolute path of the ``gatekeeper`` command an MCP host should launch.
+
+    The one next to THIS interpreter comes first: that is the environment `doctor` just checked.
+    A same-named binary elsewhere on PATH may be another install with other packages.
+    """
+    # sys.prefix is the active environment (a venv's python is often a symlink elsewhere, so
+    # resolving sys.executable would point at the wrong bin directory).
+    bin_dir = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin")
     candidate = bin_dir / ("gatekeeper.exe" if os.name == "nt" else "gatekeeper")
-    return str(candidate)
+    if candidate.is_file():
+        return str(candidate.resolve())
+    found = shutil.which("gatekeeper")
+    return str(Path(found).resolve()) if found else str(candidate)
 
 
-def _launcher_ok(command: list[str]) -> tuple[bool, str]:
-    """Can this upstream's launcher be found? Bare python is pinned to this interpreter."""
+def _launcher_ok(command: list[str], root: Path) -> tuple[bool, str]:
+    """Can this upstream's launcher be found? Bare python is pinned to this interpreter, and a
+    ``-m`` module may be an installed package or a module under the project root (servers launch
+    from there)."""
     if not command:
         return False, "no command"
     head = command[0]
     if head in ("python", "python3") or head == sys.executable:
         if len(command) >= 3 and command[1] == "-m":
             module = command[2]
-            found = importlib.util.find_spec(module.split(".")[0]) is not None
-            return found, f"module {module} {'found' if found else 'NOT installed'}"
+            in_project = (root / Path(*module.split("."))).with_suffix(".py").is_file() or (
+                root / Path(*module.split(".")) / "__init__.py"
+            ).is_file()
+            installed = importlib.util.find_spec(module.split(".")[0]) is not None
+            if in_project:
+                return True, f"module {module} (project)"
+            return installed, f"module {module} {'found' if installed else 'NOT installed'}"
         return True, "this interpreter"
     if shutil.which(head) or Path(head).is_file():
         return True, f"{head} found"
@@ -300,7 +318,9 @@ def doctor(
         checks.append(("identity", True, f"{identity_kind} (per-request tokens)"))
 
     for upstream in config["upstreams"]:
-        ok, detail = _launcher_ok([str(p) for p in upstream.get("command", [])])
+        ok, detail = _launcher_ok(
+            [str(p) for p in upstream.get("command", [])], settings.project_root
+        )
         checks.append((f"server: {upstream.get('name')}", ok, detail))
 
     all_ok = all(ok for _, ok, _ in checks)
@@ -413,15 +433,17 @@ def tail(
         else ("seq", "ts", "principal", "tool", "verdict")
     )
     for col in columns:
-        table.add_column(col)
+        table.add_column(col, overflow="fold", no_wrap=(col == "call_id"))
     for e in reversed(entries):  # oldest -> newest
-        row = [str(e.seq), e.ts, e.principal, f"{e.upstream}:{e.tool}", str(e.verdict)]
+        row = [str(e.seq), e.ts[:19], e.principal, f"{e.upstream}:{e.tool}", str(e.verdict)]
         if with_id:
-            row.insert(1, e.call_id)
+            row.insert(1, e.call_id[:12])  # a prefix is enough for `show`
         table.add_row(*row)
     _console.print(table)
     if not with_id:
         _console.print("Add --with-id to see the id each row passes to `gatekeeper show`.")
+    else:
+        _console.print("Inspect one: gatekeeper show <id>   (a prefix is enough)")
 
 
 @app.command()
@@ -464,40 +486,55 @@ def verify(
 
 @app.command()
 def show(call_id: str) -> None:
-    """Show the recorded audit entry + governance decision for one call id.
+    """Show everything recorded for one call: who, what, each decision, and the outcome.
 
-    Exit 0=found, 1=no entry for that call id, 2=misconfig. Pairs with ``verify``:
-    ``verify`` proves the whole chain is intact, ``show`` inspects one recorded decision.
+    Accepts the full call id or a prefix (as printed by ``tail --with-id``). Exit 0=found, 1=no
+    such call or ambiguous prefix, 2=misconfig. Pairs with ``verify``: ``verify`` proves the whole
+    chain is intact, ``show`` inspects one recorded call.
     """
     configure_logging(get_settings().log_level)
     log = get_logger("gatekeeper.show")
+    if len(call_id) < 4:
+        _console.print("[bold yellow]too short[/] give at least 4 characters of the call id")
+        raise typer.Exit(code=1)
     with _opened_ledger() as store:
-        # call_id is bound as a query parameter by the ORM (no injection); not found -> None.
-        entry = store.get(call_id)
-    if entry is None:
+        entries, matches = store.lifecycle(call_id)  # bound as a query parameter (no injection)
+    if matches > 1:
+        _console.print(
+            f"[bold yellow]ambiguous[/] {matches} calls start with {call_id!r}; "
+            "give more characters"
+        )
+        raise typer.Exit(code=1)
+    if not entries:
         _console.print(f"[bold yellow]not found[/] no audit entry for call_id={call_id!r}")
         log.info("show miss", extra={"call_id": call_id})
         raise typer.Exit(code=1)
 
-    # Render the recorded decision. Every field below is PII-safe by construction: the ledger
-    # stores principal/role (never the token) and HMAC digests (never the key), and raw
-    # arguments/output are never persisted (only payload_hash + a redacted result_summary).
-    verdict_color = "green" if entry.verdict == Verdict.ALLOW else "red"
-    table = Table(title=f"audit entry - call {entry.call_id}", show_header=False, box=box.ASCII)
-    table.add_row("seq", str(entry.seq))
-    table.add_row("ts (UTC)", entry.ts)
-    table.add_row("tenant", entry.tenant)
-    table.add_row("principal", f"{entry.principal} (role={entry.role})")
-    table.add_row("tool", f"{entry.upstream}:{entry.tool}")
-    table.add_row("action", str(entry.action_kind))
-    table.add_row("verdict", f"[bold {verdict_color}]{entry.verdict}[/]")
-    table.add_row("reason", entry.reason)
-    table.add_row("result", entry.result_summary or "-")
-    table.add_row("payload_hash", entry.payload_hash)
-    table.add_row("prev_hash", entry.prev_hash or "-")
-    table.add_row("entry_hash", entry.entry_hash or "-")
+    # Every field below is PII-safe by construction: the ledger stores principal/role (never the
+    # token) and HMAC digests (never the key); raw arguments/output are never persisted.
+    first, last = entries[0], entries[-1]
+    final = next((e for e in reversed(entries) if e.verdict is not Verdict.PENDING), last)
+    verdict_color = {Verdict.ALLOW: "green", Verdict.DENY: "red"}.get(final.verdict, "yellow")
+    table = Table(title=f"call {first.call_id}", show_header=False, box=box.ASCII)
+    table.add_row("principal", f"{first.principal} (role={first.role}, tenant={first.tenant})")
+    table.add_row("tool", f"{first.upstream}:{first.tool}")
+    table.add_row("action", str(first.action_kind))
+    table.add_row("final verdict", f"[bold {verdict_color}]{final.verdict}[/]")
+    table.add_row("payload_hash", first.payload_hash)
     _console.print(table)
-    _console.print("Run `gatekeeper verify` to confirm the chain that contains this entry.")
+
+    steps = Table(title="what happened, in order", box=box.ASCII)
+    for col in ("seq", "ts (UTC)", "verdict", "reason", "result"):
+        steps.add_column(col, overflow="fold")
+    for e in entries:
+        steps.add_row(
+            str(e.seq), e.ts[:19], str(e.verdict), escape(e.reason), escape(e.result_summary or "-")
+        )
+    _console.print(steps)
+    _console.print(
+        f"chain: prev_hash {last.prev_hash or '-'}\n       entry_hash {last.entry_hash or '-'}"
+    )
+    _console.print("Run `gatekeeper verify` to confirm the chain that contains these entries.")
 
 
 @app.command()
@@ -514,7 +551,9 @@ def stats(limit: int = 1000) -> None:
     # A call yields a decision entry and (when allowed+forwarded) an outcome entry that repeats
     # the verdict. Count each call_id once — its decision — so rates mean "of all calls".
     decisions: dict[str, Any] = {}
-    for e in entries:  # read() returns newest-first; keep the OLDEST entry per call (decision)
+    for e in entries:  # read() returns newest-first; keep the OLDEST decided entry per call
+        if e.verdict is Verdict.PENDING and e.call_id in decisions:
+            continue  # the hold entry precedes the decision; the decision already won
         decisions[e.call_id] = e
     calls = list(decisions.values())
     if not calls:
@@ -522,6 +561,7 @@ def stats(limit: int = 1000) -> None:
         return
     allows = [e for e in calls if e.verdict is Verdict.ALLOW]
     denies = [e for e in calls if e.verdict is Verdict.DENY]
+    waiting = [e for e in calls if e.verdict is Verdict.PENDING]
 
     table = Table(title=f"platform health - last {len(calls)} calls", box=box.ASCII)
     table.add_column("metric")
@@ -529,6 +569,8 @@ def stats(limit: int = 1000) -> None:
     table.add_row("calls", str(len(calls)))
     table.add_row("allowed", f"{len(allows)} ({len(allows) / len(calls):.0%})")
     table.add_row("denied", f"{len(denies)} ({len(denies) / len(calls):.0%})")
+    if waiting:
+        table.add_row("awaiting approval", str(len(waiting)))
     deny_by_principal = Counter(e.principal for e in denies)
     table.add_row(
         "denies by principal",
@@ -542,6 +584,92 @@ def stats(limit: int = 1000) -> None:
         "Live process metrics (overhead p95 vs budget): GET /metrics on the HTTP transport. "
         "Run `gatekeeper verify` to prove this history is untampered."
     )
+
+
+# --- human approval ---------------------------------------------------------------------------
+def _approver(by: str | None) -> str:
+    return by or getpass.getuser()
+
+
+@app.command()
+def pending() -> None:
+    """List the writes currently held for a human decision."""
+    configure_logging(get_settings().log_level)
+    from gatekeeper.gateway.factory import open_approvals
+
+    with _opened_ledger() as store:
+        queue = open_approvals(store)
+        try:
+            requests = queue.list_pending()
+        finally:
+            queue.close()
+    if not requests:
+        _console.print("(nothing waiting for approval)")
+        return
+    table = Table(title="writes waiting for a human", box=box.ASCII)
+    for col in ("id", "since (UTC)", "who", "role", "tool", "arguments"):
+        table.add_column(col, overflow="fold", no_wrap=(col == "id"))
+    for r in requests:
+        table.add_row(
+            r.id,
+            r.ts[11:19],
+            r.principal,
+            r.role,
+            f"{r.upstream}:{r.tool}",
+            escape(r.arguments_preview),
+        )
+    _console.print(table)
+    _console.print(
+        "Decide with: gatekeeper approve <id>   or   gatekeeper deny <id> --reason '...'"
+    )
+
+
+def _decide(request_id: str, status: ApprovalStatus, by: str | None, note: str) -> None:
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.approval")
+    from gatekeeper.gateway.factory import open_approvals
+
+    with _opened_ledger() as store:
+        queue = open_approvals(store)
+        try:
+            decided = queue.decide(request_id, status, by=_approver(by), note=note)
+        except ApprovalStateError as exc:
+            _console.print(f"[bold yellow]not decided[/] {exc}")
+            raise typer.Exit(code=1) from exc
+        finally:
+            queue.close()
+    color = "green" if status is ApprovalStatus.APPROVED else "red"
+    _console.print(
+        f"[bold {color}]{status.value.upper()}[/] request {decided.id}: "
+        f"{decided.principal} -> {decided.upstream}:{decided.tool} (by {decided.decided_by})"
+    )
+    _console.print(
+        "The gateway records this decision in the ledger and acts on it within a second."
+    )
+    log.info(
+        "approval decided",
+        extra={"request": decided.id, "status": status.value, "by": decided.decided_by},
+    )
+
+
+@app.command()
+def approve(
+    request_id: str,
+    by: str | None = typer.Option(None, "--by", help="Who is approving (default: your OS user)."),
+    note: str = typer.Option("", "--reason", help="Optional note recorded with the decision."),
+) -> None:
+    """Approve a held write: it is recorded as approved by you, then forwarded."""
+    _decide(request_id, ApprovalStatus.APPROVED, by, note)
+
+
+@app.command()
+def deny(
+    request_id: str,
+    by: str | None = typer.Option(None, "--by", help="Who is denying (default: your OS user)."),
+    note: str = typer.Option("", "--reason", help="Why; recorded in the ledger."),
+) -> None:
+    """Deny a held write: recorded as denied by you; the tool is never called."""
+    _decide(request_id, ApprovalStatus.DENIED, by, note)
 
 
 # --- seed-demo (kept for existing scripts; `init` supersedes it) -----------------------------

@@ -7,6 +7,7 @@ the log is append-only by construction. ``verify`` walks the chain and pinpoints
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,11 @@ class SqliteLedgerStore:
     def __init__(self, session: Session, key: str) -> None:
         self._session = session
         self._key = key
+
+    @property
+    def engine(self) -> Any:
+        """The engine this store's session is bound to (for sibling sessions on the same file)."""
+        return self._session.get_bind()
 
     # --- helpers -----------------------------------------------------------
     @staticmethod
@@ -41,7 +47,9 @@ class SqliteLedgerStore:
         The read of the chain head and the insert happen in ONE write transaction (the engine
         opens it with ``BEGIN IMMEDIATE``), so no other writer can slip in between. A failed
         commit is rolled back before re-raising: the session stays usable, so one full disk or
-        lock timeout denies *that* call, not every call until restart.
+        lock timeout denies *that* call, not every call until restart. The returned entry is
+        built before the commit, so no follow-up read (which would take the write lock again and
+        hold it) is ever needed.
         """
         try:
             prev_hash = self._last_hash()
@@ -54,32 +62,62 @@ class SqliteLedgerStore:
                 entry_hash=entry_hash,
             )
             self._session.add(row)
+            self._session.flush()  # assigns seq
+            stored = self._to_entry(row)
             self._session.commit()
         except Exception:
             self._session.rollback()
             raise
-        self._session.refresh(row)
-        return self._to_entry(row)
+        return stored
 
     def read(self, *, limit: int = 100, principal: str | None = None) -> Sequence[LedgerEntry]:
         stmt = select(LedgerEntryRow).order_by(LedgerEntryRow.seq.desc()).limit(limit)
         if principal is not None:  # tenant/owner isolation on reads
             stmt = stmt.where(LedgerEntryRow.principal == principal)
-        rows = self._session.execute(stmt).scalars().all()
-        return [self._to_entry(r) for r in rows]
+        try:
+            rows = self._session.execute(stmt).scalars().all()
+            return [self._to_entry(r) for r in rows]
+        finally:
+            self._session.rollback()  # a read must not keep the write lock (see engine setup)
 
     def get(self, call_id: str) -> LedgerEntry | None:
-        row = self._session.execute(
-            select(LedgerEntryRow)
-            .where(LedgerEntryRow.call_id == call_id)
-            .order_by(LedgerEntryRow.seq)
-            .limit(1)
-        ).scalar_one_or_none()
-        return self._to_entry(row) if row is not None else None
+        try:
+            row = self._session.execute(
+                select(LedgerEntryRow)
+                .where(LedgerEntryRow.call_id == call_id)
+                .order_by(LedgerEntryRow.seq)
+                .limit(1)
+            ).scalar_one_or_none()
+            return self._to_entry(row) if row is not None else None
+        finally:
+            self._session.rollback()
+
+    def lifecycle(self, call_id_prefix: str) -> tuple[list[LedgerEntry], int]:
+        """Every entry of the ONE call whose id starts with ``call_id_prefix``, oldest first, plus
+        how many distinct call ids matched (0 = none, 1 = found, >1 = ambiguous: entries empty)."""
+        try:
+            rows = (
+                self._session.execute(
+                    select(LedgerEntryRow)
+                    .where(LedgerEntryRow.call_id.like(f"{call_id_prefix}%"))
+                    .order_by(LedgerEntryRow.seq)
+                )
+                .scalars()
+                .all()
+            )
+            matches = sorted({r.call_id for r in rows})
+            if len(matches) != 1:
+                return [], len(matches)
+            return [self._to_entry(r) for r in rows], 1
+        finally:
+            self._session.rollback()
 
     def head(self) -> str:
         """The newest entry's hash (or the genesis hash for an empty ledger)."""
-        return self._last_hash()
+        try:
+            return self._last_hash()
+        finally:
+            self._session.rollback()
 
     def verify(self, *, expected_head: str | None = None) -> VerifyResult:
         """Walk the chain oldest→newest; recompute each hash + check linkage.
@@ -89,14 +127,18 @@ class SqliteLedgerStore:
         you pinned earlier (``gatekeeper verify`` prints it) as ``expected_head`` to close that
         gap: a chain whose head differs from the pinned one is reported as truncated.
         """
-        rows = (
-            self._session.execute(select(LedgerEntryRow).order_by(LedgerEntryRow.seq.asc()))
-            .scalars()
-            .all()
-        )
+        try:
+            rows = (
+                self._session.execute(select(LedgerEntryRow).order_by(LedgerEntryRow.seq.asc()))
+                .scalars()
+                .all()
+            )
+            entries = [self._to_entry(r) for r in rows]
+        finally:
+            self._session.rollback()
         expected_prev = GENESIS_HASH
         checked = 0
-        for row in rows:
+        for row in entries:
             if row.prev_hash != expected_prev:
                 return VerifyResult(
                     ok=False,
@@ -105,7 +147,7 @@ class SqliteLedgerStore:
                     head=expected_prev,
                     detail="prev_hash linkage broken (entry removed, reordered, or inserted)",
                 )
-            recomputed = compute_entry_hash(self._key, row.prev_hash, self._to_entry(row))
+            recomputed = compute_entry_hash(self._key, row.prev_hash, row)
             if recomputed != row.entry_hash:
                 return VerifyResult(
                     ok=False,

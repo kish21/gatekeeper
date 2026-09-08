@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+### Added — a human approves writes
+- **The approval gate.** A write the policy allows is held: recorded as `pending`, queued, and
+  the gateway waits for `gatekeeper approve <id>` or `gatekeeper deny <id> --reason ...` from
+  another process. Approved -> a chained `allow` entry naming the approver, then the forward.
+  Denied, timed out (default 90 s), or cancelled because the caller went away -> a chained
+  `deny` entry and no forward. Reads are never held; `exempt_roles` (admin) pass. Configured in
+  `config/product.yaml` `approval` or `GATEKEEPER_APPROVAL_WRITES` / `_TIMEOUT_S`. The queue
+  lives in the ledger's database (migration 0002); the arguments preview a person decides on is
+  blanked once decided, and the ledger itself never stores raw arguments.
+- `gatekeeper pending`, `approve`, `deny`; `show` now displays a call's whole lifecycle and
+  accepts an id prefix; `tail --with-id` prints copyable ids; `stats` counts held calls.
+- `scripts/agent.py`, a stand-in assistant that makes one governed call over stdio, so the
+  approval flow can be practised without an MCP host.
+- `docs/WALKTHROUGH.md`: one afternoon with GateKeeper, pasted from a real run.
+- Governed servers launch from the project root by default, so `python -m examples...`
+  launchers work when an MCP host starts the gateway from elsewhere; `doctor` resolves them the
+  same way and points the host at this environment's `gatekeeper` binary.
+
+### Fixed
+- The ledger store held the SQLite write lock between operations (a refresh after each append
+  and every read opened a transaction that was never ended), which blocked any second process.
+
 ### Changed — make it easy to run, and honest about what is hosted
 - **Two-command first run.** `gatekeeper init` generates the HMAC key and agent token into `.env`,
   creates the ledger (migrations run on boot now; `make migrate` is no longer a required step), and

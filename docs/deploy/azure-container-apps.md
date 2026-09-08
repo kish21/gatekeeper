@@ -52,6 +52,11 @@ az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper tail -
 az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper verify"
 ```
 
+An operator's write on the hosted gateway waits for a person just as it does locally. Decide it
+from inside the container: `az containerapp exec ... --command "gatekeeper pending"` then
+`... "gatekeeper approve <id>"`. Set `GATEKEEPER_APPROVAL_WRITES=off` on the app to let writes
+through without a person.
+
 ## Switch to your corporate login
 
 No rebuild. Set the OIDC variables on the app and it restarts with per-request token validation
@@ -79,6 +84,8 @@ default role.
 | `GATEKEEPER_OIDC_*` | Issuer, audience, group-to-role map, optional JWKS URL and claim names |
 | `GATEKEEPER_HTTP_ALLOWED_HOSTS` | Extra public hostnames, comma-separated. Not needed on Azure |
 | `GATEKEEPER_LEDGER_PATH` | Where the ledger file lives. The image sets `/data/audit.db` |
+| `GATEKEEPER_APPROVAL_WRITES` | `require` (default) holds operator writes for a human; `off` lets them through |
+| `GATEKEEPER_APPROVAL_TIMEOUT_S` | Seconds a held write waits before it counts as denied (90) |
 | `GATEKEEPER_ALLOW_DEMO_TOKENS` | `1` permits the repository's placeholder tokens on a public bind. Smoke tests only |
 
 Mount your own `config/` over `/app/config` (or point `GATEKEEPER_CONFIG_DIR` at it) to change the

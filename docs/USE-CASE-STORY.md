@@ -78,9 +78,12 @@ Behind the scenes, in a fraction of a second, the guard does four things:
 
 Marcus sees the summary. He never notices the guard. That is the point.
 
-Later he says: *"Open a follow-up ticket for the customer."* That is a write. Same four steps,
-same result: allowed, recorded, done. The ticket is created and the logbook shows exactly which
-badge asked for it.
+Later he says: *"Open a follow-up ticket for the customer."* That is a write, and writes get one
+more step. The guard records the request, holds it, and puts it in front of a person: Marcus's
+team lead sees who is asking, which tool, and what would change, and approves it. Only then is
+the ticket created. The logbook shows which badge asked, who approved, and when. Had the lead
+said no, or said nothing for a couple of minutes, the ticket would never have been created and
+the logbook would say that instead.
 
 ---
 
@@ -172,21 +175,18 @@ A few things happen over the next year, and none of them require a developer:
 
 ## What the story does not claim yet
 
-Be honest with anyone you tell this story to. Today, when Marcus asks for a write, it goes
-straight through and is fully recorded. **The next milestone** adds two more steps for risky
-writes: the guard asks an AI to score how dangerous the action is, and a human signs off before
-it happens. Until that ships, do not say "every write needs approval". Say "every write is checked
-against the rulebook and recorded in a logbook nobody can quietly edit", because that is true
-today.
-
----
+Be honest with anyone you tell this story to. Today every write by an operator is held for a
+human to approve, and every read goes straight through. What is **not** built yet is the part
+where an AI scores how risky each write is so that routine ones can pass without a person and
+only the dangerous ones wait. Until that ships, say "a person approves writes", not "the AI
+decides which writes need a person".
 
 ## The story in one table
 
 | Priya's question | What the guard does | Where it shows up |
 |---|---|---|
 | Who is the AI acting as? | Checks a badge on every request; refuses unknown badges | The logbook names the badge on every line |
-| What is it allowed to do? | Applies a readable rulebook; denies by default | Dana's denied write, with the reason |
+| What is it allowed to do? | Applies a readable rulebook; holds writes for a named human; denies by default | Dana's denied write, and the approval on Marcus's ticket, each with the reason |
 | What did it actually do? | Records every decision before acting, sealed and chained | The auditor's clean integrity check, and the tamper it caught |
 
 ---
@@ -201,5 +201,6 @@ with no code, the logbook verified clean, and a deliberate tamper caught.
 make demo
 ```
 
-For the full plain-English explanation of the parts, read [How it works](HOW-IT-WORKS.md). For the
+To see this story as real screen output, read [One afternoon with GateKeeper](WALKTHROUGH.md).
+For the plain-English explanation of the parts, read [How it works](HOW-IT-WORKS.md). For the
 hosted, whole-company version, read [GateKeeper on Azure](SHOWCASE-AZURE.md).

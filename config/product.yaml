@@ -6,3 +6,11 @@
 
 write_detection:
   name_patterns: ["create*", "update*", "delete*", "write*", "put*", "exec*", "run*", "send*"]
+
+# Human approval of writes. A write the policy allows is HELD until someone runs
+# `gatekeeper approve <id>` (or `deny`); no decision within the timeout is a deny. Reads are
+# never held. GATEKEEPER_APPROVAL_WRITES=require|off and GATEKEEPER_APPROVAL_TIMEOUT_S override.
+approval:
+  writes: require
+  timeout_s: 90            # keep under your MCP host's tool timeout so a late approval can't act
+  exempt_roles: [admin]    # roles whose writes go straight through (still recorded)

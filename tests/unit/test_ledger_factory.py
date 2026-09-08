@@ -71,4 +71,4 @@ def test_open_ledger_creates_the_schema_when_missing(tmp_path: Path) -> None:
         .execute(sa.text("select version_num from alembic_version"))
         .all()
     )
-    assert versions == [("0001_create_ledger",)]
+    assert versions == [("0002_create_approval_request",)]
