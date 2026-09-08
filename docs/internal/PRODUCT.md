@@ -399,6 +399,11 @@ network-exposure trigger documented *and enforced* at the boundary.
   no fired scale trigger; the real answer at that trigger is the deferred Postgres ledger). *Trade-off
   carried, not silent:* the sync durable-commit blocks the event loop (the measured ~21.5 ms p95 from
   `/eval`); the WAL `PRAGMA` fix stays queued for the first M2 slice.
+  **Amended 2026-09-08 (issue #54):** "by construction" was always too strong for a *deployed*
+  gateway — a rolling update runs two replicas against one volume for a few seconds, so the
+  invariant was deployment-dependent, not structural. It now holds by construction only for the
+  SQLite ledger on one machine. **Superseded for hosted deployments by ADR-011**, which is the
+  Postgres option this ADR itself named as "the real answer at that trigger". The trigger fired.
 - **ADR-008 — Authn enforcement lives in the pipeline; the transport only extracts credentials.**
   A `tools/call` with a missing/invalid bearer still reaches `pipeline.handle`, which **records the
   identity-deny in the ledger, then refuses** (identical to the stdio per-call path) — never a silent
@@ -417,6 +422,24 @@ network-exposure trigger documented *and enforced* at the boundary.
   M3.1 is loopback-only by ADR-009, so the "exposed beyond a trusted local/loopback boundary" clause has
   **not** fired yet; it comes into actual view at M3.2 (real OIDC) / M3.3 (hosted), where it must be
   re-evaluated again.
+- **ADR-011 — The hosted ledger is Postgres; the chain serializes on a database lock (2026-09-08).**
+  *(ADR-010 is taken: the M3.2 build-log row uses it for the PyJWT-over-MSAL choice.)*
+  Decided against the three options in issue #54 after the first live Azure run measured the SQLite
+  ledger on Azure Files (SMB) losing every record. *Chosen:* the ledger runs on **either** engine
+  behind the unchanged `LedgerStore` port — the local SQLite file by default, a managed **Postgres**
+  when `GATEKEEPER_LEDGER_URL` is set — with the append path taking a **transaction-scoped advisory
+  lock** before it reads the chain head. That moves ADR-007's serialization from "one worker, by
+  construction" into the database, which is the only place it can live once more than one replica
+  exists. *Rejected:* **Azure Files NFS 4.1** (keeps SQLite and ADR-007 intact, but pins the audit
+  trail to one cloud's premium file tier, needs a VNet-integrated environment, and still forbids a
+  second replica — it buys durability without buying scale); **a managed disk** (correct block
+  semantics, same single-replica ceiling, and Container Apps cannot mount one). *Trade-offs carried,
+  not silent:* appends still serialize by design, because a hash chain has one head — that bounds a
+  deployment's write rate to one serialized insert path; and the database is now in the fail-closed
+  path, so an unreachable ledger denies calls, which is correct for audit-before-act and means the
+  database needs control-plane availability. *Proven, not assumed:* six concurrent writer processes
+  produce one intact 240-entry chain, and with the lock stubbed out the same run breaks it — see
+  `tests/integration/test_ledger_postgres.py` and [durable-ledger](../features/durable-ledger.md).
 
 **Config (no hardcoding):** reuses `transport.{mode,http_host,http_port}` (already present in
 `platform.yaml`); adds `transport.http_path` (default `/mcp`), `transport.http_allow_non_loopback`
