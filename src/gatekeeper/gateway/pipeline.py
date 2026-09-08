@@ -227,13 +227,23 @@ class GatewayPipeline:
         #     the forward. Anything else -> a chained DENY entry, and the forward never runs.
         if held:
             assert self._approvals is not None
-            outcome = await self._hold_for_approval(
-                call_id=call_id,
-                principal=principal,
-                upstream=upstream,
-                tool=tool,
-                arguments=arguments,
-            )
+            try:
+                outcome = await self._hold_for_approval(
+                    call_id=call_id,
+                    principal=principal,
+                    upstream=upstream,
+                    tool=tool,
+                    arguments=arguments,
+                )
+            except asyncio.CancelledError:
+                # The caller went away while waiting. The ledger must still close the call:
+                # a chained DENY, so nothing is left looking "pending" forever.
+                audit(
+                    verdict=Verdict.DENY,
+                    reason="approval cancelled: the caller disconnected while waiting",
+                    result_summary="",
+                )
+                raise
             if outcome.status is ApprovalStatus.APPROVED:
                 audit(
                     verdict=Verdict.ALLOW,

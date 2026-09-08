@@ -52,10 +52,11 @@ az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper tail -
 az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper verify"
 ```
 
-An operator's write on the hosted gateway waits for a person just as it does locally. Decide it
-from inside the container: `az containerapp exec ... --command "gatekeeper pending"` then
-`... "gatekeeper approve <id>"`. Set `GATEKEEPER_APPROVAL_WRITES=off` on the app to let writes
-through without a person.
+An operator's write on the hosted gateway waits for a person just as it does locally. The desk
+is served at `https://<fqdn>/ui` once `GATEKEEPER_UI_TOKEN` is set on the app (the page asks for
+it once); without a token the UI is not mounted on a public bind. From a terminal:
+`az containerapp exec ... --command "gatekeeper pending"` then `... "gatekeeper approve <id>"`.
+Set `GATEKEEPER_APPROVAL_WRITES=off` to let writes through without a person.
 
 ## Switch to your corporate login
 
@@ -84,6 +85,7 @@ default role.
 | `GATEKEEPER_OIDC_*` | Issuer, audience, group-to-role map, optional JWKS URL and claim names |
 | `GATEKEEPER_HTTP_ALLOWED_HOSTS` | Extra public hostnames, comma-separated. Not needed on Azure |
 | `GATEKEEPER_LEDGER_PATH` | Where the ledger file lives. The image sets `/data/audit.db` |
+| `GATEKEEPER_UI_TOKEN` | Required to serve the desk at `/ui` beyond loopback; unset = no UI on a public bind |
 | `GATEKEEPER_APPROVAL_WRITES` | `require` (default) holds operator writes for a human; `off` lets them through |
 | `GATEKEEPER_APPROVAL_TIMEOUT_S` | Seconds a held write waits before it counts as denied (90) |
 | `GATEKEEPER_ALLOW_DEMO_TOKENS` | `1` permits the repository's placeholder tokens on a public bind. Smoke tests only |

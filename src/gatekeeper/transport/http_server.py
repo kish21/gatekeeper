@@ -174,8 +174,10 @@ def create_app(
     allowed_origins: list[str] | None = None,
     metrics: GatewayMetrics | None = None,
     overhead_budget_ms: float = _DEFAULT_BUDGET_MS,
+    ui_token: str | None = None,
 ) -> FastAPI:
-    """Assemble the FastAPI app: the MCP surface at ``path`` + a ``/healthz`` liveness route.
+    """Assemble the FastAPI app: the MCP surface at ``path`` + ``/healthz`` (+ the UI at ``/ui``
+    when ``ui_token`` is given: "" on loopback, the configured token beyond it; None = no UI).
 
     DNS-rebinding protection stays ENABLED (ADR-009): Host must match the loopback set (or the
     configured extras) and Origin must be in ``transport.http_allowed_origins`` (empty default =
@@ -218,6 +220,12 @@ def create_app(
         # deliberately empty of config/state — it leaks nothing about the governed surface.
         return {"status": "ok"}
 
+    if ui_token is not None:
+        from gatekeeper.adapters.ledger.factory import open_ledger
+        from gatekeeper.ui import build_router
+
+        app.include_router(build_router(open_ledger, token=ui_token))
+
     live_metrics = metrics if metrics is not None else default_metrics
 
     @app.get("/metrics")
@@ -229,6 +237,21 @@ def create_app(
         return PlainTextResponse(live_metrics.prometheus_text(budget_ms=overhead_budget_ms))
 
     return app
+
+
+def _ui_token_for(host: str, non_loopback: bool, log: Any) -> str | None:
+    """UI open on loopback; beyond it only behind GATEKEEPER_UI_TOKEN, else not mounted."""
+    if not non_loopback:
+        return ""
+    token = get_settings().ui_token
+    if token:
+        return token
+    log.warning(
+        "UI not mounted: the bind is reachable beyond this machine and GATEKEEPER_UI_TOKEN is "
+        "unset. Set it to open the approvals desk at /ui.",
+        extra={"host": host},
+    )
+    return None
 
 
 async def serve_http() -> None:
@@ -287,6 +310,7 @@ async def serve_http() -> None:
             overhead_budget_ms=float(
                 config["platform"].get("perf", {}).get("overhead_p95_ms", _DEFAULT_BUDGET_MS)
             ),
+            ui_token=_ui_token_for(cfg["host"], non_loopback, log),
         )
         # Single worker BY CONSTRUCTION (ADR-007): the programmatic uvicorn.Server is one
         # process/one event loop; no `workers` knob exists on this path. log_config=None keeps

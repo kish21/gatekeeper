@@ -69,7 +69,16 @@ secrets stay in `.env` next to the config folder, so nothing sensitive goes into
 
 ## 5. Approve or deny writes
 
-Reads go straight through. A write from an operator is held until someone decides:
+Reads go straight through. A write from an operator is held until someone decides. The easiest
+place to decide is the desk:
+
+```bash
+gatekeeper ui                              # then open http://127.0.0.1:8770/ui
+```
+
+It shows the writes waiting (who, which tool, what would change), the activity so far, a
+one-click integrity check, and the governed servers. It runs next to a gateway your MCP host
+launched; both share the ledger. The same decisions are available from a terminal:
 
 ```bash
 gatekeeper pending                         # who wants to change what
@@ -102,7 +111,7 @@ records removed from its end is reported too.
 
 | File | What it controls |
 |---|---|
-| `config/upstreams.yaml` | Which servers are governed, how to launch them, which of their tools are reads and which are writes |
+| `config/upstreams.yaml` | Which servers are governed, how to launch them, which of their tools are reads and which are writes. Ships with demo twins of SharePoint, Jira, GitHub, a database and a mailbox |
 | `config/identities.yaml` | The demo tokens and their roles. Replace them with your own for any real use |
 | `policies/gatekeeper.cedar` | The rulebook: read-only may read, operator and admin may read and write. Deny by default |
 | `config/platform.yaml` | How the gateway runs: transport, identity adapter, ledger path. Every value has an environment variable next to it |

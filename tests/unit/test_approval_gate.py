@@ -187,6 +187,9 @@ async def test_caller_that_goes_away_cancels_the_request_and_nothing_is_forwarde
 
     assert upstream.forwarded == []
     assert next(iter(queue.requests.values())).status is ApprovalStatus.CANCELLED
+    # the ledger closes the call too: held, then a deny naming the cancellation
+    assert [e.verdict for e in ledger.entries] == [Verdict.PENDING, Verdict.DENY]
+    assert "cancelled" in ledger.entries[1].reason
     # A late approval must not be possible: the request is final.
     with pytest.raises(RuntimeError):
         queue.decide(next(iter(queue.requests)), ApprovalStatus.APPROVED, by="late")
