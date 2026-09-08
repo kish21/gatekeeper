@@ -163,7 +163,9 @@ stays single and verifiable.
 az login && bash scripts/deploy_azure.sh     # Azure Container Apps, one command, safe to re-run
 ```
 
-See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is and is not durable yet.
+Never done this before? [Your first deployment](docs/deploy/first-deployment.md) walks the whole
+thing end to end in plain English, with the reason for every step. The settings reference is
+[Deploy to Azure](docs/deploy/azure-container-apps.md).
 
 ## What works today
 

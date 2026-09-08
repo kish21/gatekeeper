@@ -9,9 +9,11 @@ Start with whichever of these matches you:
   tells the use case as a story, and [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains the parts.
 - **Want to run it?** [getting-started.md](getting-started.md): install, `init`, `doctor`, connect your
   MCP host, read the audit trail.
-- **Deploying for a team?** [deploy/azure-container-apps.md](deploy/azure-container-apps.md), one command
-  on Azure, with an honest section on what is not durable yet. [SHOWCASE-AZURE.md](SHOWCASE-AZURE.md)
-  is the plain-English hosted story plus a demo script for a customer call.
+- **Deploying it for the first time?** [deploy/first-deployment.md](deploy/first-deployment.md):
+  the whole thing in one sitting, in plain English, with the reason for every step. Then
+  [deploy/azure-container-apps.md](deploy/azure-container-apps.md) is the terse reference — every
+  setting, every knob, and how the audit trail became durable. [SHOWCASE-AZURE.md](SHOWCASE-AZURE.md)
+  is the hosted story plus a demo script for a customer call.
 - **A word you do not know?** [glossary.md](glossary.md).
 
 Reference:
