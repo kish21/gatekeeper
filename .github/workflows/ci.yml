@@ -55,6 +55,16 @@ jobs:
           "
       - name: Test
         run: pytest -q
+      - name: The durable-ledger tests actually RAN (a skip must not look like a pass)
+        # They skip themselves without a database, so a broken service container would leave CI
+        # green while the restart-survival and concurrent-replica claims went unchecked.
+        run: |
+          set -o pipefail
+          pytest tests/integration/test_ledger_postgres.py -q | tee pg.txt
+          if grep -q "skipped" pg.txt; then
+            echo "::error::the durable-ledger tests skipped — the Postgres service did not come up"
+            exit 1
+          fi
       - name: Build + smoke-run the wheel (prod-bootstrap parity)
         run: |
           pip install build
