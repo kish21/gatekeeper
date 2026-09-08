@@ -17,9 +17,12 @@ When an AI assistant can read files, open tickets, or change records, three ques
 
 The last row is the point. You do not have to trust the gateway. You can check it.
 
-**Five minutes, pasted from a real run:** [One afternoon with GateKeeper](docs/WALKTHROUGH.md)
-shows an assistant's write being held, denied by a person with a reason, approved on the second
-try, and the whole record verified.
+**See it decided in a browser:** [The company demo](docs/DEMO-COMPANY.md) puts one assistant in
+front of mail, Jira, a customer database, SharePoint and GitHub, with every write stopping at
+**the desk** for a named person to approve or deny. [One afternoon with GateKeeper](docs/WALKTHROUGH.md)
+is the same story from a terminal.
+
+![The desk: writes waiting for a decision](docs/images/desk-approvals.png)
 
 ## See it in one command
 
@@ -81,7 +84,13 @@ gatekeeper doctor    # checks everything, then prints the block to paste into yo
 ```
 
 From then on the host launches the gateway, the gateway launches the governed servers, and every
-call goes through the guard. Reads pass. A write waits for you:
+call goes through the guard. Reads pass. A write waits for you at the desk:
+
+```bash
+gatekeeper ui                 # http://127.0.0.1:8770/ui — approvals, activity, trust, servers
+```
+
+or from a terminal:
 
 ```bash
 gatekeeper pending            # writes waiting for a human, with what they want to change
@@ -104,7 +113,9 @@ Full walkthrough, including what each file means: [Getting started](docs/getting
 
 ## Govern your own server
 
-Add a block to `config/upstreams.yaml`. That is the whole integration:
+The repository ships governed by default: a file server, a third-party time server, and demo
+twins of SharePoint, Jira, GitHub, a database and a mailbox with the same tool names as the real
+servers. To add a real one, add a block to `config/upstreams.yaml`. That is the whole integration:
 
 ```yaml
   - name: github
@@ -138,6 +149,8 @@ See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is an
 |---|---|
 | Every call authenticated, policy-checked, recorded before it is forwarded | Works today |
 | Writes held for a named human to approve or deny, with a timeout that counts as no | Works today |
+| A web desk for approvals, activity, the integrity check and the governed servers | Works today |
+| Mail, Jira, database, SharePoint and GitHub governed in one demo, real servers one config block away | Works today (demo twins) |
 | Tamper-evident ledger; `verify` pinpoints any altered, inserted, or removed record | Works today |
 | Any MCP server governed by config alone, credentials referenced by name | Works today |
 | HTTP transport, OIDC login, container image, `/metrics`, deny-spike alerts | Works today |
@@ -146,7 +159,7 @@ See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is an
 
 ## Learn more
 
-- [One afternoon with GateKeeper](docs/WALKTHROUGH.md), the real run, and [the use case as a story](docs/USE-CASE-STORY.md)
+- [The company demo](docs/DEMO-COMPANY.md) for a room, [One afternoon with GateKeeper](docs/WALKTHROUGH.md) for a terminal, [the use case as a story](docs/USE-CASE-STORY.md) for anyone
 - [How it works](docs/HOW-IT-WORKS.md) in plain English, and [GateKeeper on Azure](docs/SHOWCASE-AZURE.md)
 - [Glossary](docs/glossary.md), [feature docs](docs/features/), [codebase map](STRUCTURE.md)
 - Design history and decision records: [docs/internal/PRODUCT.md](docs/internal/PRODUCT.md)

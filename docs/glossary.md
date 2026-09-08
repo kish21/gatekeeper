@@ -22,6 +22,8 @@ first one is the one we keep.
 | **HMAC key** | The secret that keys the hash chain (`GATEKEEPER_HMAC_KEY`). Without it a forger cannot recompute a valid chain |
 | **Head** | The newest entry's hash. Pin it out of band and `verify --expect-head` also detects entries removed from the end |
 | **Verify** | `gatekeeper verify`: walks the chain and reports intact, or the exact record where it broke |
+| **The desk** | The web page (`gatekeeper ui`) where a person approves or denies held writes, reads the activity, runs the integrity check, and sees the governed servers |
+| **Demo twin** | A local server with the same tool names as a real one (SharePoint, Jira, GitHub, a database, a mailbox) and made-up data, so the flow can be shown without credentials |
 | **Held** (also *pending*) | A write the rulebook allows but that waits for a person. `gatekeeper pending` lists them |
 | **Approval request** | One held write, with a short id a person types into `gatekeeper approve` or `deny`. Expires after the timeout, which counts as a deny |
 | **Fail-closed** | On any error in identity, policy, or ledger writing, the call is denied, never allowed |

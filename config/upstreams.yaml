@@ -1,33 +1,76 @@
-# upstreams.yaml — the registry that makes GateKeeperAI tool-agnostic.
-# Add ANY MCP server here to bring it under governance. ZERO code per server.
-# This is the file that proves the M1.4 exit criterion ("govern a 2nd server by config edit alone").
+# upstreams.yaml — the servers the guard stands in front of. Add ANY MCP server here to govern
+# it; the gateway needs no code for a new one.
+#
+# Each entry says how to launch the server and which of its tools CHANGE things (`writes`).
+# Reads pass on their own; writes are held for a person (see config/product.yaml `approval`).
+# A tool not listed under either is classified by name (config/product.yaml `write_detection`).
+#
+# The company-systems entries below are DEMO TWINS: local servers with the same tool names as
+# the real SharePoint, Jira, GitHub, database and mailbox servers, holding a little in-memory
+# data, so the whole flow can be shown without a tenant or a token. Each has the real server
+# noted next to it; swapping is a config edit plus the credential, referenced by name.
 
 upstreams:
-  - name: demo-files            # logical id used in policy + audit
+  # --- the two servers the walkthrough and `make demo` use ---------------------------------
+  - name: demo-files
     transport: stdio
-    command: ["python", "-m", "examples.demo_file_server"]   # how to launch/reach the server
-    # Optional explicit write annotations (override write_detection name_patterns):
+    command: ["python", "-m", "examples.demo_file_server"]
     writes: ["write_file", "delete_file"]
     reads:  ["read_file", "list_dir"]
 
-  # M1.4 proof — "govern ANY server, zero code": `time` is a REAL, third-party MCP server we did NOT
-  # write (the official `mcp-server-time`, installed via `pip install -e ".[demo]"`). It is brought
-  # under full governance — identity, RBAC, tamper-evident audit — purely by THIS config block; not a
-  # single line of src/gatekeeper/ changes. Add any other MCP server the same way.
-  - name: time
+  - name: time                      # a REAL third-party server (pip install -e ".[demo]")
     transport: stdio
     command: ["python", "-m", "mcp_server_time", "--local-timezone", "UTC"]
-    reads:  ["get_current_time", "convert_time"]   # both are reads (no mutation) — config-classified
+    reads:  ["get_current_time", "convert_time"]
     writes: []
 
-  # Example: a real GitHub MCP server that needs a credential. Secrets are referenced by NAME via
-  # `{ from_env: VAR }` — the VALUE is read from .env / the process env at launch and is NEVER stored
-  # in this file (the project rule: secrets live in .env, only their names appear in YAML). A
-  # referenced-but-unset secret is fail-closed (the gateway refuses to start with a clear error).
+  # --- company systems (demo twins; real servers noted) -------------------------------------
+  - name: sharepoint                # real: a Microsoft Graph / SharePoint MCP server + app registration
+    transport: stdio
+    command: ["python", "-m", "examples.sharepoint_server"]
+    demo_twin: true
+    twin_of: "SharePoint (Microsoft Graph)"
+    reads:  ["search_documents", "get_document"]
+    writes: ["update_document", "delete_document", "share_document"]
+
+  - name: jira                      # real: Atlassian's MCP server (same tool names) + API token
+    transport: stdio
+    command: ["python", "-m", "examples.jira_server"]
+    demo_twin: true
+    twin_of: "Jira (Atlassian MCP)"
+    reads:  ["searchJiraIssuesUsingJql", "getJiraIssue"]
+    writes: ["createJiraIssue", "transitionJiraIssue", "addCommentToJiraIssue"]
+
+  - name: github                    # real: @modelcontextprotocol/server-github — see below
+    transport: stdio
+    command: ["python", "-m", "examples.github_server"]
+    demo_twin: true
+    twin_of: "GitHub (official MCP server)"
+    reads:  ["list_issues", "get_file_contents"]
+    writes: ["create_issue", "create_pull_request", "merge_pull_request", "delete_branch"]
+
+  - name: database                  # real: the reference Postgres MCP server + connection string
+    transport: stdio
+    command: ["python", "-m", "examples.database_server"]
+    demo_twin: true
+    twin_of: "Postgres (reference MCP server)"
+    reads:  ["list_tables", "query"]
+    writes: ["execute"]
+
+  - name: mail                      # real: an Outlook / Gmail MCP server + OAuth
+    transport: stdio
+    command: ["python", "-m", "examples.mail_server"]
+    demo_twin: true
+    twin_of: "Mailbox (Outlook / Gmail)"
+    reads:  ["search_emails", "read_email"]
+    writes: ["send_email"]
+
+  # --- the real GitHub server, ready to switch on: uncomment, put GITHUB_TOKEN in .env, and
+  #     remove the twin above (two servers must not expose the same tool names) -------------
   # - name: github
   #   transport: stdio
   #   command: ["npx", "-y", "@modelcontextprotocol/server-github"]
   #   env:
-  #     GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # put GITHUB_TOKEN=ghp_... in .env
+  #     GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # the value stays in .env, never here
   #   reads:  ["search_repositories", "get_file_contents", "list_issues"]
-  #   writes: ["create_issue", "merge_pull_request", "delete_branch"]
+  #   writes: ["create_issue", "create_pull_request", "merge_pull_request", "delete_branch"]

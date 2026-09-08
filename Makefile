@@ -20,6 +20,14 @@ demo: ## Play the 5-beat governance story end-to-end (no setup; hermetic, throwa
 demo-enterprise: ## Play the ENTERPRISE story: governed over HTTP with real-login (OIDC), hermetic
 	$(PY) -m scripts.demo_enterprise
 
+.PHONY: ui
+ui: ## Open the guard's desk (approvals, activity, trust, servers) at http://127.0.0.1:8770/ui
+	$(PY) -m gatekeeper.cli.app ui
+
+.PHONY: demo-company
+demo-company: ## The company demo: mail, Jira, database, SharePoint, GitHub through the guard (run `make ui` first)
+	$(PY) -m scripts.demo_company
+
 .PHONY: init
 init: ## One-time setup: secrets into .env, ledger created, demo files seeded
 	$(PY) -m gatekeeper.cli.app init

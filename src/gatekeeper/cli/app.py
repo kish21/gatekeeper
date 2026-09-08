@@ -9,6 +9,7 @@ gatekeeper show ID   # show the decision recorded for one call
 gatekeeper stats     # allow/deny counts from the ledger
 gatekeeper pending   # writes waiting for a human
 gatekeeper approve ID / deny ID   # decide one
+gatekeeper ui        # the same, as a web page (approvals, activity, trust, servers)
 """
 
 from __future__ import annotations
@@ -670,6 +671,41 @@ def deny(
 ) -> None:
     """Deny a held write: recorded as denied by you; the tool is never called."""
     _decide(request_id, ApprovalStatus.DENIED, by, note)
+
+
+@app.command()
+def ui(
+    port: int | None = typer.Option(None, "--port", help="Default: GATEKEEPER_UI_PORT or 8770."),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Bind address. Beyond loopback needs GATEKEEPER_UI_TOKEN."
+    ),
+) -> None:
+    """Open the guard's desk in a browser: approvals, activity, trust check, governed servers.
+
+    Runs next to a gateway an MCP host launched over stdio (both share the ledger database), or
+    on its own. Exit 2 on misconfig.
+    """
+    import uvicorn
+
+    from gatekeeper.ui import create_ui_app, ui_token_for_bind
+
+    configure_logging(get_settings().log_level)
+    try:
+        boot()  # fail-closed HMAC key + config present; the ledger opens per request
+        token = ui_token_for_bind(host)
+        if host not in ("127.0.0.1", "localhost", "::1") and not token:
+            raise ConfigError(
+                "Binding the UI beyond this machine requires GATEKEEPER_UI_TOKEN (the page asks "
+                "for it once). Refusing to expose the approvals desk without one."
+            )
+    except ConfigError as exc:
+        _console.print(f"[bold red][ERROR] {exc}[/]")
+        raise typer.Exit(code=2) from exc
+    chosen = port or get_settings().ui_port
+    _console.print(f"GateKeeper desk: [bold]http://{host}:{chosen}/ui[/]   (Ctrl-C to stop)")
+    uvicorn.run(
+        create_ui_app(open_ledger, token=token), host=host, port=chosen, log_level="warning"
+    )
 
 
 # --- seed-demo (kept for existing scripts; `init` supersedes it) -----------------------------

@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     approval_writes: str = Field(default="", description="require | off")
     approval_timeout_s: float | None = Field(default=None)
 
+    # --- the web UI ---------------------------------------------------------------------------
+    ui_token: str = Field(
+        default="",
+        description="Required to open the UI when the gateway is reachable beyond this machine.",
+    )
+    ui_port: int = Field(default=8770, description="Port for `gatekeeper ui`.")
+
     # --- guards ---------------------------------------------------------------------------------
     allow_demo_tokens: bool = Field(
         default=False,

@@ -2,6 +2,8 @@
 
 Start with whichever of these matches you:
 
+- **Showing it to a room?** [DEMO-COMPANY.md](DEMO-COMPANY.md): one assistant, five company
+  systems, every write decided in the browser. Twelve minutes, with what to say at each step.
 - **New to GateKeeper?** [WALKTHROUGH.md](WALKTHROUGH.md) is one afternoon with it, pasted from a
   real run: a write held, denied, approved, and the record verified. [USE-CASE-STORY.md](USE-CASE-STORY.md)
   tells the use case as a story, and [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains the parts.

@@ -19,7 +19,8 @@ gatekeeper/
 ├── policies/gatekeeper.cedar   # the rulebook: role x read/write -> allow; deny by default
 │
 ├── src/gatekeeper/         # ── the package ──
-│   ├── cli/                #   `gatekeeper` init · doctor · serve · pending · approve · deny · tail · verify · show · stats
+│   ├── cli/                #   `gatekeeper` init · doctor · serve · ui · pending · approve · deny · tail · verify · show · stats
+│   ├── ui/                 #   the desk: approvals, activity, trust, servers (one HTML page + a JSON API)
 │   ├── transport/          #   MCP bindings: stdio (one identity per process) and HTTP (per-request)
 │   ├── gateway/            #   the pipeline: identity -> classify -> policy -> [hold for a human] -> audit -> forward -> audit
 │   ├── domain/             #   pure logic: read/write classification, error types
@@ -36,8 +37,8 @@ gatekeeper/
 │   └── infra/              #   JSON logging, metrics, alerts
 │
 ├── deploy/container/entrypoint.sh   # `exec gatekeeper serve`
-├── scripts/                # demo.py · demo_enterprise.py · agent.py (a stand-in assistant) · deploy_azure.sh · probe_hosted.py · windows/*.bat
-├── examples/               # demo_file_server.py — the governed demo target (read + write tools)
+├── scripts/                # demo.py · demo_company.py · demo_enterprise.py · agent.py · deploy_azure.sh · probe_hosted.py · windows/*.bat
+├── examples/               # governed demo targets: demo_file_server + twins of sharepoint, jira, github, database, mail
 ├── tests/                  # unit · integration · adversarial · golden (RBAC dataset) · eval (benchmarks)
 └── docs/                   # getting-started · deploy · features · runbooks · glossary · internal/
 ```

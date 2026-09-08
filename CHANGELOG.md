@@ -5,6 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+### Added — the desk, and the whole company behind the guard
+- **`gatekeeper ui`**, a web page for the people who are not engineers: writes waiting for a
+  decision as cards with Approve/Deny and a reason; the activity as a filterable list with each
+  call's full story; a one-click integrity check with counts; the governed servers and their
+  read/write tools. Runs next to a stdio gateway (shared ledger) and is mounted at `/ui` on the
+  HTTP transport. Open on loopback; beyond it only behind `GATEKEEPER_UI_TOKEN`.
+- **Five company systems governed out of the box**: demo twins of SharePoint, Jira, GitHub, a
+  database and a mailbox, with the same tool names as the real servers and in-memory data, so
+  the full flow shows without a tenant or token. The real GitHub server is a commented config
+  block away.
+- **`scripts/demo_company.py`** plus `docs/DEMO-COMPANY.md`: a twelve-minute presenter's script
+  with a real transcript and screenshots. `--auto` rehearses it by deciding through the UI API.
+- A call whose caller disconnected while waiting now gets a chained `deny` entry, so nothing is
+  left looking pending forever.
+
 ### Added — a human approves writes
 - **The approval gate.** A write the policy allows is held: recorded as `pending`, queued, and
   the gateway waits for `gatekeeper approve <id>` or `gatekeeper deny <id> --reason ...` from

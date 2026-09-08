@@ -107,8 +107,9 @@ $ gatekeeper pending
 Decide with: gatekeeper approve <id>   or   gatekeeper deny <id> --reason '...'
 ```
 
-She can see exactly what the assistant wants to do, on whose behalf, before it happens. The
-ticket about that meeting is still open, so she says no:
+She can see exactly what the assistant wants to do, on whose behalf, before it happens. (The
+same request is a card with Approve and Deny buttons at `gatekeeper ui`; Priya prefers the
+terminal today.) The ticket about that meeting is still open, so she says no:
 
 ```text
 $ gatekeeper deny ea15e33b --reason "not while the ticket is still open"
