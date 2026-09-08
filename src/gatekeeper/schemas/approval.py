@@ -8,12 +8,36 @@ only the keyed payload hash, as always.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from gatekeeper.schemas.enums import ApprovalStatus
+from gatekeeper.schemas.enums import ApprovalStatus, ApproverMethod
 
 #: Max chars of the arguments shown to the approver (enough to decide, not a dump).
 ARGUMENTS_PREVIEW_MAX = 500
+
+
+class Approver(BaseModel):
+    """The person deciding a held write, and the strength of the proof that it is them.
+
+    ``id`` is what the ledger will name. ``method`` is how that name was established — a corporate
+    login, their own bearer token, a shell on the gateway host, or (loopback development only) a
+    name typed into the page. The audit record carries both, so nobody has to guess later how much
+    an approval is worth.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1, max_length=120)
+    role: str = Field(default="", description="Gateway role, when the identity carries one.")
+    method: ApproverMethod
+
+    @property
+    def is_console(self) -> bool:
+        return self.method is ApproverMethod.CONSOLE
+
+    def describe(self) -> str:
+        """How this approver appears in the ledger, e.g. ``priya.n (oidc)`` — proof included."""
+        return f"{self.id} ({self.method.value})"
 
 
 class ApprovalRequest(BaseModel):
@@ -31,6 +55,9 @@ class ApprovalRequest(BaseModel):
     )
     status: ApprovalStatus = ApprovalStatus.PENDING
     decided_by: str = ""
+    decided_method: str = Field(
+        default="", description="How the approver was identified (ApproverMethod), or empty."
+    )
     decided_at: str = ""
     note: str = ""
 

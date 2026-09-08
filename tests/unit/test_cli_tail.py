@@ -1,6 +1,6 @@
 """CLI tests for ``gatekeeper tail`` — and the ``--with-id`` column.
 
-Reuses the same temp-backed real ``SqliteLedgerStore`` pattern as ``test_cli_show``: the call_id is
+Reuses the same temp-backed real ``SqlLedgerStore`` pattern as ``test_cli_show``: the call_id is
 hidden by default (too wide for the table) and surfaced only with ``--with-id`` so an operator can
 copy it into ``show <call_id>``.
 """
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.cli import app as cli_app
 from gatekeeper.db.base import Base
 from gatekeeper.schemas.enums import ActionKind, Verdict
@@ -49,13 +49,13 @@ def seeded_db(tmp_path: Any, monkeypatch: Any) -> Iterator[str]:
     db_path = str(tmp_path / "audit.db")
     engine = sa.create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
-    seed = SqliteLedgerStore(Session(engine), KEY)
+    seed = SqlLedgerStore(Session(engine), KEY)
     seed.append(_entry("call-one"))
     seed.append(_entry("call-two", tool="write_file", action_kind=ActionKind.WRITE))
     seed.close()
 
-    def _fake_open(*_a: Any, **_k: Any) -> SqliteLedgerStore:
-        return SqliteLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
+    def _fake_open(*_a: Any, **_k: Any) -> SqlLedgerStore:
+        return SqlLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
 
     monkeypatch.setenv("GATEKEEPER_HMAC_KEY", GOOD_HMAC)
     monkeypatch.setattr(cli_app, "open_ledger", _fake_open)

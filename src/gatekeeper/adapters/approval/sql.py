@@ -1,9 +1,10 @@
-"""SQLite ``ApprovalQueue`` — the held-writes table in the ledger's own database file.
+"""SQL ``ApprovalQueue`` — the held-writes table in the ledger's own database.
 
-Sharing the file means one place to back up and one lock to reason about; the gateway process
-waits on a request while ``gatekeeper approve`` in another process decides it. Every read here ends
-its transaction immediately so a waiting gateway sees the other process's commit on its next poll
-(a lingering read transaction would pin a stale snapshot).
+Sharing the database means one place to back up and one lock to reason about; the gateway process
+waits on a request while ``gatekeeper approve``, the desk, or another replica decides it. Every
+read here ends its transaction immediately so a waiting gateway sees the other process's commit on
+its next poll (a lingering read transaction would pin a stale snapshot). Works on SQLite (one
+machine) and Postgres (many replicas) — see ``gatekeeper.db.base``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class SqliteApprovalQueue:
+class SqlApprovalQueue:
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -69,12 +70,24 @@ class SqliteApprovalQueue:
             self._session.rollback()
 
     def decide(
-        self, request_id: str, status: ApprovalStatus, *, by: str, note: str = ""
+        self,
+        request_id: str,
+        status: ApprovalStatus,
+        *,
+        by: str,
+        note: str = "",
+        method: str = "",
     ) -> ApprovalRequest:
         if status is ApprovalStatus.PENDING:
             raise ApprovalStateError("a decision must be a final status")
         try:
-            row = self._session.get(ApprovalRequestRow, request_id, populate_existing=True)
+            # Lock the row for the transaction so two approvers deciding the same request at the
+            # same moment cannot both pass the pending check: the second one waits, then sees the
+            # first one's decision and is refused. (SQLite ignores FOR UPDATE — its whole write
+            # transaction is already exclusive, which gives the same guarantee.)
+            row = self._session.get(
+                ApprovalRequestRow, request_id, populate_existing=True, with_for_update=True
+            )
             if row is None:
                 raise ApprovalStateError(f"no approval request {request_id!r}")
             if row.status != ApprovalStatus.PENDING.value:
@@ -84,6 +97,7 @@ class SqliteApprovalQueue:
                 )
             row.status = status.value
             row.decided_by = by
+            row.decided_method = method
             row.decided_at = _now()
             row.note = note
             row.arguments_preview = ""  # the preview served its purpose; do not keep raw args

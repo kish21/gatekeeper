@@ -17,8 +17,11 @@ Start with whichever of these matches you:
 Reference:
 
 - **`features/`** — one page per built capability (what it does, how it is configured, its limits):
-  proxy, RBAC, ledger, tamper evidence, config-driven servers, HTTP transport, OIDC identity, container,
-  observability.
+  proxy, RBAC, [rules that read the arguments](features/argument-aware-policy.md), ledger, tamper
+  evidence, [the durable Postgres ledger](features/durable-ledger.md),
+  [export, retention and key rotation](features/ledger-operations.md),
+  [risk scoring](features/risk-scoring.md), config-driven servers, HTTP transport, OIDC identity,
+  container, observability.
 - **`runbooks/`** — [connector-onboarding.md](runbooks/connector-onboarding.md): govern a credentialed
   third-party MCP server with config and `.env` only.
 - **`internal/`** — the product spine with its decision records and build log

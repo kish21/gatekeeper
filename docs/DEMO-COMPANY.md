@@ -33,7 +33,7 @@ Open two terminals and a browser.
 
 | Terminal 1 | Terminal 2 | Browser |
 |---|---|---|
-| `gatekeeper ui` | (wait) | http://127.0.0.1:8770/ui, type your name under **Deciding as** |
+| `gatekeeper ui` | (wait) | http://127.0.0.1:8770/ui. On your own machine the desk asks who is deciding; on a shared one you sign in and it knows |
 
 Rehearse once with `python -m scripts.demo_company --auto`, which decides the writes itself
 using the script below. Then `rm -rf .gatekeeper && gatekeeper init` for a clean ledger.
@@ -94,7 +94,7 @@ Click **Activity**.
 ![Everything the assistant did](images/desk-activity.png)
 
 Say: "Every action, in order, who, which system, read or write, and the outcome. Click one."
-Click the denied database write. The row opens to show the hold, then the denial with your name
+Click the denied database write. The row opens to show the hold, then the denial with the approver's name
 and reason, then the chain hashes.
 
 Click **Trust**.

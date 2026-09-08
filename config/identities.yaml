@@ -15,4 +15,8 @@ principals:
 
   - token: dev-token-root-REPLACE-ME
     principal: root
-    role: admin           # may read + write (still audited; still approval-gated in M2)
+    role: admin           # may read + write (still audited); may also release held writes
+
+  - token: dev-token-priya-REPLACE-ME
+    principal: priya
+    role: approver        # decides held writes at the desk; makes no calls of her own

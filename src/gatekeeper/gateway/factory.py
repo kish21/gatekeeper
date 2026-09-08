@@ -12,20 +12,26 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.approval.sqlite import SqliteApprovalQueue
+from gatekeeper.adapters.approval.sql import SqlApprovalQueue
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.factory import open_ledger
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir, secret_source
 from gatekeeper.domain.classify import ActionClassifier
+from gatekeeper.domain.risk import RiskScorer, hold_threshold
 from gatekeeper.gateway.pipeline import ApprovalPolicy, GatewayPipeline
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
+from gatekeeper.infra.notify import notifier_from_settings
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
 
 _DEFAULT_UPSTREAM_TIMEOUT = 30.0
+#: Seconds a held write waits for a person when product.yaml does not say. Long enough that a
+#: notification can reach someone and they can read what the call wants to do; short enough that a
+#: forgotten request resolves itself (as a deny) instead of pinning a connection forever.
+DEFAULT_APPROVAL_TIMEOUT_S = 300.0
 
 
 @dataclass
@@ -35,11 +41,17 @@ class GatewayRuntime:
     pipeline: GatewayPipeline
     identity: IdentityResolver
     upstream: McpUpstreamClient
-    ledger: SqliteLedgerStore
+    ledger: SqlLedgerStore
 
     async def aclose(self) -> None:
         await self.upstream.aclose()
         self.ledger.close()
+
+
+def build_identity(config: dict[str, Any]) -> IdentityResolver:
+    """The configured identity resolver. Public because the desk authenticates approvers against
+    the SAME source the gateway authenticates callers with — one identity model, not two."""
+    return _build_identity(config["platform"], config.get("identities") or [])
 
 
 def _build_identity(platform: dict[str, Any], identities: list[dict[str, Any]]) -> IdentityResolver:
@@ -65,14 +77,15 @@ def approval_policy_from_config(product: dict[str, Any]) -> ApprovalPolicy:
     approval = product.get("approval", {}) or {}
     return ApprovalPolicy(
         writes_require=str(approval.get("writes", "off")).lower() == "require",
-        timeout_s=float(approval.get("timeout_s", 90)),
+        timeout_s=float(approval.get("timeout_s", DEFAULT_APPROVAL_TIMEOUT_S)),
         exempt_roles=frozenset(str(r) for r in (approval.get("exempt_roles") or [])),
+        hold_at=hold_threshold(product),
     )
 
 
-def open_approvals(ledger: SqliteLedgerStore) -> SqliteApprovalQueue:
+def open_approvals(ledger: SqlLedgerStore) -> SqlApprovalQueue:
     """The approval queue lives in the ledger's database: same file, its own session."""
-    return SqliteApprovalQueue(Session(ledger.engine))
+    return SqlApprovalQueue(Session(ledger.engine))
 
 
 def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) -> ActionClassifier:
@@ -88,7 +101,7 @@ def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) 
 
 
 def build_pipeline(
-    config: dict[str, Any], *, hmac_key: str, ledger: SqliteLedgerStore
+    config: dict[str, Any], *, hmac_key: str, ledger: SqlLedgerStore
 ) -> GatewayRuntime:
     """Wire the governed pipeline from config against an injected ledger + key.
 
@@ -139,6 +152,8 @@ def build_pipeline(
         alerter=alerter,
         approvals=open_approvals(ledger) if approval_policy.writes_require else None,
         approval_policy=approval_policy,
+        notifier=notifier_from_settings(get_settings()),
+        risk=RiskScorer.from_config(product),
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 

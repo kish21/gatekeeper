@@ -13,8 +13,9 @@ class ApprovalQueue(Protocol):
     """Hold, look up, and decide approval requests.
 
     Contract: ``decide`` only moves a ``pending`` request to a final state and raises on any
-    other transition (a decision cannot be changed or repeated). ``get`` must return the latest
-    state even when another process made the decision — the gateway polls it while it waits.
+    other transition (a decision cannot be changed or repeated); it records ``by`` together with
+    the ``method`` that proved that name. ``get`` must return the latest state even when another
+    process made the decision — the gateway polls it while it waits.
     """
 
     def create(self, request: ApprovalRequest) -> ApprovalRequest: ...
@@ -24,5 +25,11 @@ class ApprovalQueue(Protocol):
     def list_pending(self) -> Sequence[ApprovalRequest]: ...
 
     def decide(
-        self, request_id: str, status: ApprovalStatus, *, by: str, note: str = ""
+        self,
+        request_id: str,
+        status: ApprovalStatus,
+        *,
+        by: str,
+        note: str = "",
+        method: str = "",
     ) -> ApprovalRequest: ...

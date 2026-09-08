@@ -68,6 +68,6 @@ flowchart LR
 
 ## Code
 - `src/gatekeeper/adapters/ledger/hashchain.py` — pure HMAC chain math.
-- `src/gatekeeper/adapters/ledger/sqlite.py` — `SqliteLedgerStore` (append/read/get/verify).
+- `src/gatekeeper/adapters/ledger/sqlite.py` — `SqlLedgerStore` (append/read/get/verify).
 - `src/gatekeeper/adapters/ledger/factory.py` — `open_ledger()` (fail-closed + fail-loud).
 - `src/gatekeeper/cli/app.py` — `verify` / `tail` + `_opened_ledger()`.

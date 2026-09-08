@@ -22,7 +22,7 @@ import secrets
 import shutil
 import sys
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -33,22 +33,28 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from gatekeeper.adapters.approval.sqlite import ApprovalStateError
+from gatekeeper.adapters.approval.sql import ApprovalStateError
 from gatekeeper.adapters.ledger.factory import open_ledger
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.config.loader import (
     ENV_FILE,
     ConfigError,
     Settings,
     boot,
     get_settings,
-    ledger_path,
+    ledger_target,
     load_config,
     policy_dir,
     validate_security,
 )
+from gatekeeper.db.base import is_url, redact_url
+from gatekeeper.domain.approval_rules import approver_rules_from_config
+from gatekeeper.domain.errors import ApprovalRefused
+from gatekeeper.gateway.factory import DEFAULT_APPROVAL_TIMEOUT_S
 from gatekeeper.infra.logging import configure_logging, get_logger
-from gatekeeper.schemas.enums import ApprovalStatus, Verdict
+from gatekeeper.schemas.approval import Approver
+from gatekeeper.schemas.enums import ApprovalStatus, ApproverMethod, Verdict
+from gatekeeper.schemas.ledger import LedgerEntry
 
 app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
@@ -72,10 +78,67 @@ _DEMO_SAMPLE_TEXT = (
 #: Env keys `init` fills in when they are missing or empty (never overwriting a set value).
 _ENV_HMAC = "GATEKEEPER_HMAC_KEY"
 _ENV_AGENT_TOKEN = "GATEKEEPER_AGENT_TOKEN"  # noqa: S105 — a variable NAME, not a value
+_ENV_HMAC_PREVIOUS = "GATEKEEPER_HMAC_KEY_PREVIOUS"
+
+
+def _ledger_label(config: dict[str, Any]) -> str:
+    """Where the ledger lives, safe to print: a file path, or a password-redacted Postgres URL."""
+    target = ledger_target(config)
+    return target if not is_url(target) else f"{redact_url(target)}  (postgres)"
+
+
+def _durability_check(config: dict[str, Any]) -> tuple[str, bool, str]:
+    """Is the audit trail going to survive this deployment?
+
+    A SQLite file is right on one machine and wrong the moment the gateway is a container that can
+    be replaced: the file goes with it, and on an SMB share it corrupts instead of failing loudly.
+    So a network-facing gateway on the file ledger is reported as a FAILED check with the fix,
+    rather than as a footnote someone reads after losing an audit trail.
+    """
+    target = ledger_target(config)
+    listens_on_network = bool(
+        config["platform"].get("transport", {}).get("http_allow_non_loopback", False)
+    )
+    if is_url(target):
+        return ("ledger durability", True, "postgres: survives a restart, safe with many replicas")
+    if listens_on_network:
+        return (
+            "ledger durability",
+            False,
+            "this gateway is network-facing but keeps its ledger in a local SQLite file, which is "
+            "lost when the container is replaced. Set GATEKEEPER_LEDGER_URL to a Postgres database",
+        )
+    return ("ledger durability", True, "sqlite file: fine for one machine (loopback only)")
+
+
+def _notification_check(config: dict[str, Any], settings: Settings) -> tuple[str, bool, str]:
+    """If writes are held for a person, is any person actually told?
+
+    On your own machine, watching the desk is a fair way to work, so this only reports. For a
+    gateway a team shares, it fails: an approver who is not told is an approver who does not
+    decide, and every held write then dies of timeout — a governance feature that silently
+    degrades into an outage is worse than one that is switched off on purpose.
+    """
+    approval = config["product"].get("approval") or {}
+    holds_writes = str(approval.get("writes", "off")).lower() == "require"
+    shared = bool(config["platform"].get("transport", {}).get("http_allow_non_loopback", False))
+    timeout = approval.get("timeout_s", DEFAULT_APPROVAL_TIMEOUT_S)
+    if not holds_writes:
+        return ("approval notifications", True, "not needed: writes are not held for a person")
+    if settings.approval_webhook or settings.alert_webhook:
+        where = settings.desk_url or "no GATEKEEPER_DESK_URL set: the message says what, not where"
+        return ("approval notifications", True, f"held writes are announced ({where})")
+    unheard = (
+        "nothing announces a held write, so somebody has to be watching the desk when it "
+        f"arrives or it is denied after {timeout}s. Set GATEKEEPER_APPROVAL_WEBHOOK"
+    )
+    if shared:
+        return ("approval notifications", False, unheard)
+    return ("approval notifications", True, f"watching the desk yourself is fine here; {unheard}")
 
 
 @contextmanager
-def _opened_ledger() -> Iterator[SqliteLedgerStore]:
+def _opened_ledger() -> Iterator[SqlLedgerStore]:
     """Open the ledger, map a misconfig to exit 2, and always close it (shared by commands)."""
     try:
         store = open_ledger()
@@ -124,6 +187,23 @@ def _upsert_env(path: Path, updates: dict[str, str]) -> list[str]:
             written.append(key)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return written
+
+
+def _replace_env(path: Path, updates: dict[str, str]) -> None:
+    """Set each key in ``updates``, OVERWRITING any existing value.
+
+    Distinct from ``_upsert_env``, which never touches a value someone already set — right for
+    first-run setup, wrong for a rotation, whose entire purpose is to replace the value that is
+    there. Keeping the two apart means neither can quietly do the other's job.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+    lines.extend(f"{key}={value}" for key, value in remaining.items())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _first_token(identities: list[dict[str, Any]], role: str) -> str:
@@ -187,7 +267,7 @@ def init() -> None:
         "secrets file",
         f"{env_path}  ({'wrote ' + ', '.join(written) if written else 'kept as is'})",
     )
-    table.add_row("audit ledger", f"{ledger_path(config)}  ({entries} entries, chain intact)")
+    table.add_row("audit ledger", f"{_ledger_label(config)}  ({entries} entries, chain intact)")
     table.add_row("demo sandbox", f"{sandbox} ({_DEMO_SAMPLE_FILE})")
     table.add_row("governed servers", ", ".join(str(u.get("name")) for u in config["upstreams"]))
     _console.print(table)
@@ -282,13 +362,16 @@ def doctor(
                 (
                     "audit ledger",
                     result.ok,
-                    f"{ledger_path(config)} ({result.checked} entries, {result.detail})",
+                    f"{_ledger_label(config)} ({result.checked} entries, {result.detail})",
                 )
             )
         except typer.Exit:
             checks.append(("audit ledger", False, "cannot open (see error above)"))
     else:
         checks.append(("audit ledger", False, "skipped: no HMAC key"))
+
+    checks.append(_durability_check(config))
+    checks.append(_notification_check(config, settings))
 
     try:
         from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
@@ -361,7 +444,7 @@ def health() -> None:
     table = Table(title="GateKeeperAI - health", show_header=False, box=box.ASCII)
     table.add_row("env", settings.env)
     table.add_row("HMAC key", "set (validated, fail-closed)")
-    table.add_row("audit ledger", ledger_path(config))
+    table.add_row("audit ledger", _ledger_label(config))
     table.add_row("policy dir", policy_dir(config))
     table.add_row("adapters", ", ".join(f"{k}={v}" for k, v in adapters.items()))
     table.add_row("transport", str(platform.get("transport", {}).get("mode", "stdio")))
@@ -454,16 +537,25 @@ def verify(
         "--expect-head",
         help="A head hash printed by an earlier verify. Detects records removed from the end.",
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Machine-readable result, for a cron job or a monitoring check."
+    ),
 ) -> None:
     """Verify audit-ledger integrity. Exit 0=intact, 1=tampered, 2=misconfig.
 
     Pin the printed head somewhere the ledger's host cannot reach (a ticket, a separate log);
-    pass it back with --expect-head to also detect a truncated chain.
+    pass it back with --expect-head to also detect a truncated chain. Run it on a schedule with
+    --json: the exit code is the alert, the JSON is the evidence.
     """
     configure_logging(get_settings().log_level)
     log = get_logger("gatekeeper.verify")
     with _opened_ledger() as store:
         result = store.verify(expected_head=expect_head)
+    if as_json:
+        _console.print_json(result.model_dump_json())
+        if not result.ok:
+            raise typer.Exit(code=1)
+        return
     if result.ok:
         _console.print(f"[bold green]OK[/] ledger intact - {result.checked} entries verified")
         _console.print(f"head: {result.head}")
@@ -483,6 +575,192 @@ def verify(
         {"broken_at": result.broken_at, "detail": result.detail, "checked": result.checked},
     )
     raise typer.Exit(code=1)
+
+
+# --- taking the record somewhere else: the SIEM, the archive, a new key ------------------------
+def _as_jsonl(entry: LedgerEntry) -> str:
+    return entry.model_dump_json()
+
+
+def _as_csv(entry: LedgerEntry) -> str:
+    values = [
+        str(entry.seq),
+        entry.ts,
+        entry.call_id,
+        entry.principal,
+        entry.role,
+        f"{entry.upstream}:{entry.tool}",
+        entry.action_kind.value,
+        entry.verdict.value,
+        entry.reason.replace('"', "'"),
+        entry.result_summary.replace('"', "'"),
+        entry.entry_hash or "",
+    ]
+    return ",".join(f'"{v}"' for v in values)
+
+
+def _as_cef(entry: LedgerEntry) -> str:
+    """ArcSight CEF — the format most SIEMs ingest without a custom parser."""
+    severity = {"deny": 7, "pending": 4, "allow": 2}.get(entry.verdict.value, 3)
+    extension = " ".join(
+        f"{k}={v}"
+        for k, v in {
+            "rt": entry.ts,
+            "suser": entry.principal,
+            "sproc": f"{entry.upstream}:{entry.tool}",
+            "act": entry.verdict.value,
+            "cs1Label": "reason",
+            "cs1": entry.reason.replace("=", "-").replace("|", "/"),
+            "cs2Label": "callId",
+            "cs2": entry.call_id,
+            "cn1Label": "seq",
+            "cn1": entry.seq,
+        }.items()
+    )
+    return (
+        f"CEF:0|GateKeeperAI|gatekeeper|1|{entry.action_kind.value}.{entry.verdict.value}"
+        f"|{entry.upstream}:{entry.tool}|{severity}|{extension}"
+    )
+
+
+_FORMATTERS = {"jsonl": _as_jsonl, "csv": _as_csv, "cef": _as_cef}
+_CSV_HEADER = "seq,ts,call_id,principal,role,tool,action,verdict,reason,result,entry_hash"
+
+
+def _write_entries(entries: Iterable[LedgerEntry], fmt: str, out: Path | None) -> int:
+    """Stream entries in ``fmt`` to a file or stdout. Returns how many were written."""
+    formatter = _FORMATTERS[fmt]
+    handle = out.open("w", encoding="utf-8") if out else None
+    written = 0
+    try:
+        if fmt == "csv":
+            print(_CSV_HEADER, file=handle)
+        for entry in entries:
+            print(formatter(entry), file=handle)
+            written += 1
+    finally:
+        if handle is not None:
+            handle.close()
+    return written
+
+
+@app.command()
+def export(
+    since: str = typer.Option("", "--since", help="UTC date or timestamp, e.g. 2026-01-01."),
+    until: str = typer.Option("", "--until", help="Exclusive upper bound, same format."),
+    fmt: str = typer.Option("jsonl", "--format", help="jsonl | csv | cef"),
+    out: Path | None = typer.Option(None, "--out", help="Write here instead of stdout."),
+) -> None:
+    """Export the audit trail for your SIEM, an auditor, or a spreadsheet.
+
+    The ledger is the durable record; this is a copy of it in a shape something else can read.
+    Streamed in batches, so exporting a year costs bounded memory. Nothing is removed — see
+    `gatekeeper archive` for retention.
+    """
+    configure_logging(get_settings().log_level)
+    if fmt not in _FORMATTERS:
+        _console.print(f"[bold red][ERROR][/] unknown format {fmt!r} (jsonl | csv | cef)")
+        raise typer.Exit(code=2)
+    with _opened_ledger() as store:
+        written = _write_entries(
+            store.entries_between(since_ts=since or None, until_ts=until or None), fmt, out
+        )
+    if out:
+        _console.print(f"exported {written} entries to {out} ({fmt})")
+
+
+@app.command()
+def archive(
+    before: str = typer.Option(..., "--before", help="Archive entries older than this UTC date."),
+    out: Path = typer.Option(..., "--out", help="Where the archived entries are written."),
+    prune: bool = typer.Option(
+        False,
+        "--prune",
+        help="Also REMOVE them from the ledger, leaving a signed checkpoint in their place.",
+    ),
+    note: str = typer.Option("", "--note", help="Why, recorded in the checkpoint."),
+) -> None:
+    """Archive old entries, and optionally remove them under a signed retention checkpoint.
+
+    A hash chain proves nothing was removed; a retention policy exists to remove things. Rather
+    than pretend those do not conflict, a prune records where the cut was and what the chain's
+    state was at that point, and signs that statement with the ledger key. `verify` then resumes
+    from the checkpoint and reports it — so the removal is accountable, and removing records
+    WITHOUT such a signed account is still detected as tampering.
+
+    The archive file is always written first. A deletion with nowhere to read the records back
+    from is not retention.
+    """
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.archive")
+    with _opened_ledger() as store:
+        written = _write_entries(store.entries_before(before), "jsonl", out)
+        if written == 0:
+            _console.print(f"nothing older than {before}; no archive written")
+            raise typer.Exit(code=0)
+        _console.print(f"archived {written} entries to {out}")
+        if not prune:
+            _console.print("Nothing was removed. Re-run with --prune to apply retention.")
+            return
+        try:
+            checkpoint = store.prune_before(before, archive_path=str(out), note=note)
+        except ValueError as exc:
+            _console.print(f"[bold yellow]nothing pruned[/] {exc}")
+            raise typer.Exit(code=1) from exc
+        result = store.verify()
+
+    _console.print(
+        f"[bold]removed[/] {checkpoint.pruned_count} entries through seq "
+        f"{checkpoint.through_seq}, under a signed checkpoint"
+    )
+    _console.print(f"verify -> {'OK' if result.ok else 'FAILED'}: {escape(result.detail)}")
+    log.info(
+        "retention applied",
+        extra={
+            "through_seq": checkpoint.through_seq,
+            "pruned": checkpoint.pruned_count,
+            "archive": str(out),
+            "verify_ok": result.ok,
+        },
+    )
+
+
+@app.command(name="rotate-key")
+def rotate_key(
+    yes: bool = typer.Option(False, "--yes", help="Do it without asking."),
+) -> None:
+    """Rotate the ledger's chain key, keeping every existing record verifiable.
+
+    Generates a new key, moves the current one into GATEKEEPER_HMAC_KEY_PREVIOUS, and writes both
+    back to .env. New entries are signed with the new key; older ones keep the fingerprint of the
+    key that signed them, so one `verify` still walks the whole chain.
+
+    Keep the retired keys. Deleting one makes every record it signed unverifiable — which looks
+    exactly like tampering, and cannot be undone.
+    """
+    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    if not settings.hmac_key.strip():
+        _console.print("[bold red][ERROR][/] there is no key to rotate. Run `gatekeeper init`.")
+        raise typer.Exit(code=2)
+    if not yes and not typer.confirm("Rotate the ledger chain key now?"):
+        _console.print("nothing changed")
+        raise typer.Exit(code=1)
+
+    env_path = settings.project_root / ENV_FILE
+    existing = _read_env_file(env_path)
+    retired = [k for k in (existing.get("GATEKEEPER_HMAC_KEY_PREVIOUS", ""), "") if k]
+    previous = ",".join([settings.hmac_key, *retired])
+    _replace_env(env_path, {_ENV_HMAC: secrets.token_hex(32), _ENV_HMAC_PREVIOUS: previous})
+    get_settings.cache_clear()
+
+    with _opened_ledger() as store:
+        result = store.verify()
+    _console.print(f"[bold green]rotated[/] new chain key written to {env_path}")
+    _console.print(f"the retired key is kept in {_ENV_HMAC_PREVIOUS} so old records still verify")
+    _console.print(f"verify -> {'OK' if result.ok else 'FAILED'}: {escape(result.detail)}")
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -588,8 +866,14 @@ def stats(limit: int = 1000) -> None:
 
 
 # --- human approval ---------------------------------------------------------------------------
-def _approver(by: str | None) -> str:
-    return by or getpass.getuser()
+def _approver(by: str | None) -> Approver:
+    """Who is deciding at a terminal on the gateway host.
+
+    ``--by`` names a colleague you are deciding on behalf of; without it the OS user is recorded.
+    Either way the method is ``console``: the proof is a shell on the gateway host, which is a real
+    (and privileged) thing to have, but it is not a login — and the ledger says so.
+    """
+    return Approver(id=by or getpass.getuser(), method=ApproverMethod.CONSOLE)
 
 
 @app.command()
@@ -630,10 +914,24 @@ def _decide(request_id: str, status: ApprovalStatus, by: str | None, note: str) 
     log = get_logger("gatekeeper.approval")
     from gatekeeper.gateway.factory import open_approvals
 
+    approver = _approver(by)
+    rules = approver_rules_from_config(load_config()["product"], require_verified=False)
     with _opened_ledger() as store:
         queue = open_approvals(store)
         try:
-            decided = queue.decide(request_id, status, by=_approver(by), note=note)
+            held = queue.get(request_id)
+            if held is None:
+                _console.print(f"[bold yellow]not decided[/] no approval request {request_id!r}")
+                raise typer.Exit(code=1)
+            # Checked before anything is written, so a refusal leaves the write held for someone
+            # who is allowed to release it — the same rules the desk applies.
+            rules.check(held, approver)
+            decided = queue.decide(
+                request_id, status, by=approver.id, note=note, method=approver.method.value
+            )
+        except ApprovalRefused as exc:
+            _console.print(f"[bold yellow]not decided[/] {exc}")
+            raise typer.Exit(code=1) from exc
         except ApprovalStateError as exc:
             _console.print(f"[bold yellow]not decided[/] {exc}")
             raise typer.Exit(code=1) from exc
@@ -642,14 +940,20 @@ def _decide(request_id: str, status: ApprovalStatus, by: str | None, note: str) 
     color = "green" if status is ApprovalStatus.APPROVED else "red"
     _console.print(
         f"[bold {color}]{status.value.upper()}[/] request {decided.id}: "
-        f"{decided.principal} -> {decided.upstream}:{decided.tool} (by {decided.decided_by})"
+        f"{decided.principal} -> {decided.upstream}:{decided.tool} "
+        f"(by {decided.decided_by}, {decided.decided_method})"
     )
     _console.print(
         "The gateway records this decision in the ledger and acts on it within a second."
     )
     log.info(
         "approval decided",
-        extra={"request": decided.id, "status": status.value, "by": decided.decided_by},
+        extra={
+            "request": decided.id,
+            "status": status.value,
+            "by": decided.decided_by,
+            "method": decided.decided_method,
+        },
     )
 
 
@@ -703,8 +1007,13 @@ def ui(
         raise typer.Exit(code=2) from exc
     chosen = port or get_settings().ui_port
     _console.print(f"GateKeeper desk: [bold]http://{host}:{chosen}/ui[/]   (Ctrl-C to stop)")
+    loopback = host in ("127.0.0.1", "localhost", "::1")
     uvicorn.run(
-        create_ui_app(open_ledger, token=token), host=host, port=chosen, log_level="warning"
+        # Beyond loopback a decision needs a proven identity: the desk refuses a typed-in name.
+        create_ui_app(open_ledger, token=token, require_verified=not loopback),
+        host=host,
+        port=chosen,
+        log_level="warning",
     )
 
 

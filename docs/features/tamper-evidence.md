@@ -73,6 +73,6 @@ flowchart LR
 
 ## Code
 - `src/gatekeeper/cli/app.py` — `show` (new) · `verify` / `tail` · `_opened_ledger()`.
-- `src/gatekeeper/adapters/ledger/sqlite.py` — `SqliteLedgerStore.get` / `verify` (reused).
+- `src/gatekeeper/adapters/ledger/sqlite.py` — `SqlLedgerStore.get` / `verify` (reused).
 - `tests/unit/test_cli_show.py` — the `show` CLI tests.
 - Chain mechanics + ledger DoD: [`ledger.md`](ledger.md).

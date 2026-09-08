@@ -57,6 +57,11 @@ class Settings(BaseSettings):
 
     # --- secrets -------------------------------------------------------------------------------
     hmac_key: str = Field(default="", description="Keyed-HMAC key for the audit hash-chain.")
+    hmac_key_previous: str = Field(
+        default="",
+        description="Comma-separated retired chain keys. Entries written before a rotation are "
+        "verified with the key that signed them, so rotating never orphans the old records.",
+    )
     agent_token: str = Field(
         default="",
         description="Bearer token the agent presents to the stdio gateway (-> a Principal).",
@@ -65,12 +70,26 @@ class Settings(BaseSettings):
         default="",
         description="Operator alert webhook URL (Slack/Teams/PagerDuty-style). Empty = off.",
     )
+    approval_webhook: str = Field(
+        default="",
+        description="Where held writes are announced (Slack/Teams incoming webhook). Empty = fall "
+        "back to alert_webhook; both empty = nobody is told, and holds die of timeout.",
+    )
+    desk_url: str = Field(
+        default="",
+        description="Public URL of the desk, put into notifications so they are actionable.",
+    )
 
     # --- where things live ---------------------------------------------------------------------
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     config_dir: Path = Field(default=Path("./config"))
     ledger_path: str = Field(default="", description="Overrides platform.yaml ledger.path.")
+    ledger_url: str = Field(
+        default="",
+        description="Postgres URL for a hosted, durable ledger. Set = the ledger lives there and "
+        "ledger.path is ignored; unset = the SQLite file at ledger.path.",
+    )
     policy_dir: str = Field(default="", description="Overrides platform.yaml policy.dir.")
 
     # --- transport (overrides platform.yaml transport.*) ---------------------------------------
@@ -142,9 +161,24 @@ DEFAULT_POLICY_DIR = "./policies"
 PLACEHOLDER_TOKEN_SUFFIX = "-REPLACE-ME"  # noqa: S105 — a marker, not a credential
 
 
+def previous_hmac_keys(settings: Settings) -> list[str]:
+    """Retired chain keys, in the order they should be tried when verifying an older entry."""
+    return _split_csv(settings.hmac_key_previous)
+
+
 def ledger_path(config: dict[str, Any]) -> str:
     """The configured ledger DB path (platform.yaml -> ledger.path), or the default. One source."""
     return str(config["platform"].get("ledger", {}).get("path", DEFAULT_LEDGER_PATH))
+
+
+def ledger_target(config: dict[str, Any]) -> str:
+    """Where the ledger lives: the Postgres URL if one is configured, else the SQLite path.
+
+    One function so every caller — the store, the migrations, the CLI, the desk — resolves the
+    ledger the same way and a hosted deployment can move it with one environment variable.
+    """
+    url = str(config["platform"].get("ledger", {}).get("url", "") or "").strip()
+    return url or ledger_path(config)
 
 
 def policy_dir(config: dict[str, Any]) -> str:
@@ -234,6 +268,8 @@ def _apply_env_overrides(config: dict[str, Any], settings: Settings) -> None:
 
     if settings.ledger_path:
         platform.setdefault("ledger", {})["path"] = settings.ledger_path
+    if settings.ledger_url:
+        platform.setdefault("ledger", {})["url"] = settings.ledger_url
     if settings.policy_dir:
         platform.setdefault("policy", {})["dir"] = settings.policy_dir
 

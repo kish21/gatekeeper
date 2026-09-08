@@ -82,7 +82,7 @@ launched; both share the ledger. The same decisions are available from a termina
 
 ```bash
 gatekeeper pending                         # who wants to change what
-gatekeeper approve <id>                    # recorded under your name, then carried out
+gatekeeper approve <id>                    # recorded under your name (as a `console` decision)
 gatekeeper deny <id> --reason "not yet"    # recorded, never carried out
 ```
 

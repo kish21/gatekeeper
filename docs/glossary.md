@@ -26,6 +26,16 @@ first one is the one we keep.
 | **Demo twin** | A local server with the same tool names as a real one (SharePoint, Jira, GitHub, a database, a mailbox) and made-up data, so the flow can be shown without credentials |
 | **Held** (also *pending*) | A write the rulebook allows but that waits for a person. `gatekeeper pending` lists them |
 | **Approval request** | One held write, with a short id a person types into `gatekeeper approve` or `deny`. Expires after the timeout, which counts as a deny |
+| **Approver** | Someone allowed to release a held write. A role (`approval.approver_roles`), separate from the roles that may call tools |
+| **Four-eyes** | Nobody approves their own call. Without it, the hold is a formality |
+| **Proof method** | How an approver's name was established: `oidc` (company login), `token` (their own bearer token), `console` (a shell on the gateway host), `local` (typed on a loopback page). Recorded next to the name |
+| **Argument attributes** | The normalized things a rule can read about a call — `branch`, `path`, `table`, `recipients`, `domains`, `amount` — the same name whatever the server calls its argument |
+| **Guardrail** | A Cedar `forbid` rule. It beats every `permit`, including an admin's |
+| **Risk score** | 0.0–1.0 for a write, from configured signals. At or above `risk.hold_at` it stops at the desk. It never decides allow/deny |
+| **Durable ledger** | The ledger in a Postgres database instead of a local file: survives a restart, readable from any process, safe with several replicas |
+| **Chain lock** | What stops two replicas reading the same chain head and forking it (`BEGIN IMMEDIATE` on SQLite, an advisory lock on Postgres) |
+| **Key fingerprint** | A hash of the chain key, stored on each entry, so a rotated key still verifies what the old one signed |
+| **Retention checkpoint** | The signed record a prune leaves: where the cut was, the chain's state there, how many went. `verify` resumes from it |
 | **Fail-closed** | On any error in identity, policy, or ledger writing, the call is denied, never allowed |
 | **Audit before act** | The decision is written to the ledger before the call is forwarded |
 | **stdio** | The gateway running as a subprocess of the MCP host, one identity per process |

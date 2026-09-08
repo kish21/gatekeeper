@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.cli import app as cli_app
 from gatekeeper.db.base import Base
 from gatekeeper.domain.classify import ActionClassifier
@@ -231,7 +231,7 @@ def seeded_db(tmp_path: Any, monkeypatch: Any) -> Iterator[str]:
     db_path = str(tmp_path / "audit.db")
     engine = sa.create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
-    seed = SqliteLedgerStore(Session(engine), KEY)
+    seed = SqlLedgerStore(Session(engine), KEY)
     # Two allowed calls (decision + outcome pairs -> must be counted ONCE each) + one deny.
     for cid in ("a1", "a2"):
         seed.append(_entry(cid))
@@ -249,8 +249,8 @@ def seeded_db(tmp_path: Any, monkeypatch: Any) -> Iterator[str]:
     )
     seed.close()
 
-    def _fake_open(*_a: Any, **_k: Any) -> SqliteLedgerStore:
-        return SqliteLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
+    def _fake_open(*_a: Any, **_k: Any) -> SqlLedgerStore:
+        return SqlLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
 
     monkeypatch.setenv("GATEKEEPER_HMAC_KEY", "a" * 64)
     monkeypatch.setattr(cli_app, "open_ledger", _fake_open)
@@ -273,8 +273,8 @@ def test_stats_empty_ledger(tmp_path: Any, monkeypatch: Any) -> None:
     engine = sa.create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
 
-    def _fake_open(*_a: Any, **_k: Any) -> SqliteLedgerStore:
-        return SqliteLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
+    def _fake_open(*_a: Any, **_k: Any) -> SqlLedgerStore:
+        return SqlLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
 
     monkeypatch.setattr(cli_app, "open_ledger", _fake_open)
     result = runner.invoke(cli_app.app, ["stats"])

@@ -40,7 +40,14 @@ adapters:
 #     leeway_s: 30                 # clock-skew tolerance
 
 ledger:
-  path: ./.gatekeeper/audit.db     # GATEKEEPER_LEDGER_PATH
+  path: ./.gatekeeper/audit.db     # GATEKEEPER_LEDGER_PATH   the SQLite file (one machine)
+  # url: postgresql://user:password@host:5432/gatekeeper
+  #                                 # GATEKEEPER_LEDGER_URL   a managed Postgres database.
+  # Set it and the ledger lives there instead of the file above: the audit trail survives the
+  # container being replaced, `verify` works from any process, and more than one replica can serve
+  # at once (appends serialize on a database lock). Required for a hosted deployment — the file on
+  # a container disk is lost with the container, and on an SMB share it corrupts.
+  # Never write the password here; it belongs in .env or a platform secret.
   hash_algo: hmac-sha256           # the chain's keyed hash (key = GATEKEEPER_HMAC_KEY)
 
 policy:

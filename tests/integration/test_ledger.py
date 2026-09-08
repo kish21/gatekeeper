@@ -9,7 +9,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.db.base import Base
 from gatekeeper.db.models import LedgerEntryRow
 from gatekeeper.schemas.enums import ActionKind, Verdict
@@ -19,11 +19,11 @@ KEY = "k" * 64
 
 
 @pytest.fixture
-def store(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def store(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)  # schema; the migration is tested separately
     session = Session(engine)
-    yield SqliteLedgerStore(session, KEY)
+    yield SqlLedgerStore(session, KEY)
     session.close()
 
 
@@ -44,7 +44,7 @@ def _entry(call_id: str, **over: Any) -> LedgerEntry:
     return LedgerEntry(**base)
 
 
-def test_append_chains_entries(store: SqliteLedgerStore):
+def test_append_chains_entries(store: SqlLedgerStore):
     e1 = store.append(_entry("c1"))
     e2 = store.append(_entry("c2"))
     assert (e1.seq, e2.seq) == (1, 2)
@@ -53,14 +53,14 @@ def test_append_chains_entries(store: SqliteLedgerStore):
     assert e1.entry_hash != e2.entry_hash
 
 
-def test_verify_ok_on_intact_chain(store: SqliteLedgerStore):
+def test_verify_ok_on_intact_chain(store: SqlLedgerStore):
     for i in range(3):
         store.append(_entry(f"c{i}"))
     result = store.verify()
     assert result.ok and result.checked == 3
 
 
-def test_verify_detects_field_tamper(store: SqliteLedgerStore):
+def test_verify_detects_field_tamper(store: SqlLedgerStore):
     for i in range(3):
         store.append(_entry(f"c{i}"))
     # Simulate an attacker editing a stored record directly.
@@ -72,7 +72,7 @@ def test_verify_detects_field_tamper(store: SqliteLedgerStore):
     assert not result.ok and result.broken_at == 2
 
 
-def test_verify_detects_deletion(store: SqliteLedgerStore):
+def test_verify_detects_deletion(store: SqlLedgerStore):
     for i in range(3):
         store.append(_entry(f"c{i}"))
     store._session.execute(sa.delete(LedgerEntryRow).where(LedgerEntryRow.seq == 2))
@@ -81,14 +81,14 @@ def test_verify_detects_deletion(store: SqliteLedgerStore):
     assert not result.ok and result.broken_at == 3  # entry 3's prev_hash no longer links
 
 
-def test_wrong_key_cannot_verify(store: SqliteLedgerStore):
+def test_wrong_key_cannot_verify(store: SqlLedgerStore):
     store.append(_entry("c1"))
-    forger = SqliteLedgerStore(store._session, "z" * 64)  # same data, wrong key
+    forger = SqlLedgerStore(store._session, "z" * 64)  # same data, wrong key
     result = forger.verify()
     assert not result.ok and result.broken_at == 1
 
 
-def test_read_get_and_tenant_filter(store: SqliteLedgerStore):
+def test_read_get_and_tenant_filter(store: SqlLedgerStore):
     store.append(_entry("c1", principal="alice"))
     store.append(_entry("c2", principal="bob"))
     assert len(store.read(limit=10)) == 2
@@ -99,7 +99,7 @@ def test_read_get_and_tenant_filter(store: SqliteLedgerStore):
 
 
 # --- hardening: failure isolation, tail-truncation pinning, cross-process chain safety ---------
-def test_failed_append_rolls_back_and_the_store_stays_usable(store: SqliteLedgerStore):
+def test_failed_append_rolls_back_and_the_store_stays_usable(store: SqlLedgerStore):
     store.append(_entry("c1"))
     # Force the commit to fail: a duplicate entry_hash violates the unique constraint.
     bad = _entry("c2")
@@ -120,7 +120,7 @@ def test_failed_append_rolls_back_and_the_store_stays_usable(store: SqliteLedger
 
 
 def test_verify_reports_head_and_detects_tail_truncation_against_pinned_head(
-    store: SqliteLedgerStore,
+    store: SqlLedgerStore,
 ):
     for i in range(3):
         store.append(_entry(f"c{i}"))
@@ -150,7 +150,7 @@ def test_two_processes_appending_never_fork_the_chain(tmp_path: Any):
     for p in procs:
         p.join(60)
         assert p.exitcode == 0
-    check = SqliteLedgerStore(Session(create_ledger_engine(db)), KEY)
+    check = SqlLedgerStore(Session(create_ledger_engine(db)), KEY)
     result = check.verify()
     assert result.ok and result.checked == 50, result
 
@@ -158,7 +158,7 @@ def test_two_processes_appending_never_fork_the_chain(tmp_path: Any):
 def _append_many(db: str, tag: str, n: int) -> None:  # runs in a child process
     from sqlalchemy.orm import Session as _Session
 
-    from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore as _Store
+    from gatekeeper.adapters.ledger.sql import SqlLedgerStore as _Store
     from gatekeeper.db.base import create_ledger_engine as _engine
 
     store = _Store(_Session(_engine(db)), "k" * 64)

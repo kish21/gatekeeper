@@ -37,11 +37,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from gatekeeper.adapters.ledger.hashchain import compute_payload_hash
+from gatekeeper.domain.arguments import policy_context
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.domain.errors import ApprovalDenied, IdentityError, PolicyDenied
+from gatekeeper.domain.risk import RiskScorer
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.infra.logging import get_logger
 from gatekeeper.infra.metrics import GatewayMetrics, default_metrics
+from gatekeeper.infra.notify import ApprovalNotifier
 from gatekeeper.infra.tracing import ErrorReporter, default_reporter
 from gatekeeper.ports.approval import ApprovalQueue
 from gatekeeper.ports.identity import IdentityResolver
@@ -60,15 +63,28 @@ UNAUTHENTICATED_ROLE = "<none>"
 
 @dataclass(frozen=True)
 class ApprovalPolicy:
-    """When a policy-allowed call is still held for a human (from ``product.yaml`` ``approval``)."""
+    """When a policy-allowed call is still held for a human (from ``product.yaml`` ``approval``).
+
+    ``hold_at`` is the risk score at or above which a write stops at the desk. The default of 0.0
+    holds every write, which is the right posture to start from: you learn what your assistants
+    actually do before you decide what to let through. Raising it is how a deployment keeps human
+    attention on the writes that deserve it once it knows.
+    """
 
     writes_require: bool = False
     timeout_s: float = 90.0
     exempt_roles: frozenset[str] = field(default_factory=frozenset)
     poll_s: float = 0.5
+    hold_at: float = 0.0
 
-    def applies(self, role: str, action: ActionKind) -> bool:
-        return self.writes_require and action is ActionKind.WRITE and role not in self.exempt_roles
+    def applies(self, role: str, action: ActionKind, risk: float | None = None) -> bool:
+        """Should this call wait for a person?"""
+        if not (self.writes_require and action is ActionKind.WRITE):
+            return False
+        if role in self.exempt_roles:
+            return False
+        # An unscored write is held: absence of a score is never a reason to skip the human.
+        return risk is None or risk >= self.hold_at
 
 
 def _utc_now_iso() -> str:
@@ -76,10 +92,21 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _decider(outcome: ApprovalRequest) -> str:
+    """The approver as the ledger names them: who, and how that name was proven.
+
+    An auditor reading "approved by priya via oidc" three years from now can tell that priya
+    signed in with the company login; "via local" says a name was typed into a loopback page.
+    Recording the proof next to the name is what stops the audit trail from over-claiming.
+    """
+    method = f" via {outcome.decided_method}" if outcome.decided_method else ""
+    return f"{outcome.decided_by}{method}"
+
+
 def _approval_deny_reason(outcome: ApprovalRequest, timeout_s: float) -> str:
     if outcome.status is ApprovalStatus.DENIED:
         note = f": {outcome.note}" if outcome.note else ""
-        return f"denied by {outcome.decided_by} (request {outcome.id}){note}"
+        return f"denied by {_decider(outcome)} (request {outcome.id}){note}"
     if outcome.status is ApprovalStatus.EXPIRED:
         return f"approval timed out after {timeout_s:g}s (request {outcome.id})"
     return f"approval {outcome.status.value} (request {outcome.id})"
@@ -104,6 +131,8 @@ class GatewayPipeline:
         alerter: WebhookAlerter | None = None,
         approvals: ApprovalQueue | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        notifier: ApprovalNotifier | None = None,
+        risk: RiskScorer | None = None,
     ) -> None:
         self._identity = identity
         self._classifier = classifier
@@ -118,6 +147,12 @@ class GatewayPipeline:
         self._alerter = alerter
         self._approvals = approvals
         self._approval_policy = approval_policy or ApprovalPolicy()
+        #: Tells people a write is waiting. Off by default; a hold without one still works, it
+        #: just relies on somebody watching the desk.
+        self._notifier = notifier or ApprovalNotifier()
+        #: Rates writes so the desk sees the ones that matter. The default scorer with the default
+        #: threshold holds everything, which is what an unconfigured gateway should do.
+        self._risk = risk or RiskScorer()
         self._log = get_logger("gatekeeper.gateway")
 
     async def handle(
@@ -170,6 +205,14 @@ class GatewayPipeline:
         #    The engine is fail-closed (any error -> DENY); default decision is deny.
         decision = self._policy.evaluate(principal, call)
 
+        # 3b. Risk score (M2.1). It NEVER changes allow/deny — the rulebook did that — it decides
+        #     how much human attention this write earns. Recorded on every entry for the call.
+        if decision.verdict is Verdict.ALLOW and action is ActionKind.WRITE:
+            assessment = self._risk.score(f"{upstream}:{tool}", policy_context(arguments))
+            decision = decision.model_copy(update={"risk": assessment.risk})
+        else:
+            assessment = None
+
         # A per-call recorder bound to the constants for this call, so the decision and outcome
         # entries can never drift on who/what — only verdict, reason + result_summary vary.
         audit = self._call_recorder(
@@ -184,7 +227,7 @@ class GatewayPipeline:
 
         # 4. AUDIT BEFORE ACT — if this raises, we never forward (fail-closed).
         held = decision.verdict is Verdict.ALLOW and self._approval_policy.applies(
-            principal.role, action
+            principal.role, action, decision.risk
         )
         if held and self._approvals is None:
             # Approval is required but there is no queue to hold the call in: fail closed.
@@ -194,10 +237,15 @@ class GatewayPipeline:
                 reason="write requires human approval but no approval queue is configured",
             )
             held = False
+        risk_note = ""
+        if assessment is not None:
+            risk_note = f" [risk {assessment.risk:.2f}: {assessment.reason}]"
         audit(
             verdict=Verdict.PENDING if held else decision.verdict,
             reason=(
-                f"write held for human approval ({decision.reason})" if held else decision.reason
+                f"write held for human approval ({decision.reason}){risk_note}"
+                if held
+                else f"{decision.reason}{risk_note}"
             ),
             result_summary="",
         )
@@ -247,7 +295,7 @@ class GatewayPipeline:
             if outcome.status is ApprovalStatus.APPROVED:
                 audit(
                     verdict=Verdict.ALLOW,
-                    reason=f"approved by {outcome.decided_by} (request {outcome.id})",
+                    reason=f"approved by {_decider(outcome)} (request {outcome.id})",
                     result_summary="",
                 )
             else:
@@ -334,31 +382,39 @@ class GatewayPipeline:
                 "timeout_s": policy.timeout_s,
             },
         )
+        # Tell the approvers, off the hot path. A hold nobody hears about is a slow denial.
+        self._notifier.send(self._notifier.held(request, timeout_s=policy.timeout_s))
+
         loop = asyncio.get_running_loop()
         deadline = loop.time() + policy.timeout_s
         try:
             while True:
                 current = self._approvals.get(request.id)
                 if current is not None and current.is_final:
+                    self._notifier.send(self._notifier.decided(current))
                     return current
                 if loop.time() >= deadline:
-                    return self._approvals.decide(
+                    expired = self._approvals.decide(
                         request.id,
                         ApprovalStatus.EXPIRED,
                         by="gateway",
                         note=f"no decision within {policy.timeout_s:g}s",
                     )
+                    self._notifier.send(self._notifier.decided(expired))
+                    return expired
                 await asyncio.sleep(policy.poll_s)
         except asyncio.CancelledError:
             # The caller stopped waiting: a late approval must never execute a write nobody is
             # watching. Best-effort mark; if the request was decided meanwhile, keep that record.
             try:
-                self._approvals.decide(
+                cancelled = self._approvals.decide(
                     request.id,
                     ApprovalStatus.CANCELLED,
                     by="gateway",
                     note="caller disconnected while waiting",
                 )
+                # Close the loop in chat too, so an approver does not decide a dead request.
+                self._notifier.send(self._notifier.decided(cancelled))
             except Exception as exc:  # noqa: BLE001 — already decided or store gone
                 self._log.debug("could not mark request cancelled", extra={"error": str(exc)})
             raise

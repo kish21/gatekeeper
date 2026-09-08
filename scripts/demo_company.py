@@ -128,17 +128,24 @@ def _text(result: types.CallToolResult) -> str:
     return "\n".join(b.text for b in result.content if isinstance(b, types.TextContent)).strip()
 
 
+#: Priya's own token from config/identities.yaml — she holds the `approver` role. Presenting it
+#: is what makes the decision land in the ledger as "approved by priya via token" rather than as a
+#: name somebody typed; it is the same thing a real approver's login does.
+APPROVER_TOKEN = "dev-token-priya-REPLACE-ME"  # noqa: S105 — a public demo placeholder
+
+
 async def _auto_decide(ui: str, decision: tuple[str, str]) -> None:
-    """Rehearsal mode: wait for the request to appear on the desk, then decide it via the API."""
+    """Rehearsal mode: wait for the request to appear on the desk, then decide it as priya."""
     status, note = decision
-    async with httpx.AsyncClient(timeout=10) as http:
+    headers = {"Authorization": f"Bearer {APPROVER_TOKEN}"}
+    async with httpx.AsyncClient(timeout=10, headers=headers) as http:
         for _ in range(100):
             pending = (await http.get(f"{ui}/ui/api/pending")).json()
             if pending:
                 rid = pending[-1]["id"]
                 await http.post(
                     f"{ui}/ui/api/pending/{rid}/decision",
-                    json={"status": status, "by": "priya", "note": note},
+                    json={"status": status, "note": note},
                 )
                 return
             await asyncio.sleep(0.2)

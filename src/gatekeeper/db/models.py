@@ -33,6 +33,7 @@ class LedgerEntryRow(Base):
     payload_hash: Mapped[str] = mapped_column(String, nullable=False)
     result_summary: Mapped[str] = mapped_column(String, nullable=False, default="")
     risk: Mapped[float | None] = mapped_column(Float, nullable=True)
+    key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     prev_hash: Mapped[str] = mapped_column(String, nullable=False)
     entry_hash: Mapped[str] = mapped_column(String, nullable=False)
     schema_version: Mapped[int] = mapped_column(
@@ -43,6 +44,22 @@ class LedgerEntryRow(Base):
         UniqueConstraint("entry_hash", name="uq_ledger_entry_hash"),
         Index("ix_ledger_principal_ts", "principal", "ts"),
     )
+
+
+class LedgerCheckpointRow(Base):
+    """A signed record that entries up to ``through_seq`` were archived and removed."""
+
+    __tablename__ = "ledger_checkpoint"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    through_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    through_hash: Mapped[str] = mapped_column(String, nullable=False)
+    pruned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archive_path: Mapped[str] = mapped_column(String, nullable=False, default="")
+    note: Mapped[str] = mapped_column(String, nullable=False, default="")
+    key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    checkpoint_hash: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class ApprovalRequestRow(Base):
@@ -60,5 +77,6 @@ class ApprovalRequestRow(Base):
     arguments_preview: Mapped[str] = mapped_column(String, nullable=False, default="")
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending", index=True)
     decided_by: Mapped[str] = mapped_column(String, nullable=False, default="")
+    decided_method: Mapped[str] = mapped_column(String, nullable=False, default="")
     decided_at: Mapped[str] = mapped_column(String, nullable=False, default="")
     note: Mapped[str] = mapped_column(String, nullable=False, default="")

@@ -20,7 +20,7 @@ from mcp import types
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient, UpstreamSpec
 from gatekeeper.db.base import Base
@@ -51,16 +51,16 @@ def _demo_spec() -> UpstreamSpec:
 
 
 @pytest.fixture
-def ledger(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def ledger(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
     session = Session(engine)
-    store = SqliteLedgerStore(session, KEY)
+    store = SqlLedgerStore(session, KEY)
     yield store
     store.close()
 
 
-def _pipeline(ledger: SqliteLedgerStore, upstream: McpUpstreamClient) -> GatewayPipeline:
+def _pipeline(ledger: SqlLedgerStore, upstream: McpUpstreamClient) -> GatewayPipeline:
     return GatewayPipeline(
         identity=StaticTokenResolver.from_config(_IDENTITIES),
         classifier=ActionClassifier(
@@ -73,7 +73,7 @@ def _pipeline(ledger: SqliteLedgerStore, upstream: McpUpstreamClient) -> Gateway
     )
 
 
-async def test_live_proxy_forwards_audits_and_verifies(ledger: SqliteLedgerStore) -> None:
+async def test_live_proxy_forwards_audits_and_verifies(ledger: SqlLedgerStore) -> None:
     upstream = McpUpstreamClient([_demo_spec()], timeout=30.0)
     pipe = _pipeline(ledger, upstream)
     fname = f"it-{uuid.uuid4().hex}.txt"
@@ -115,7 +115,7 @@ async def test_live_proxy_forwards_audits_and_verifies(ledger: SqliteLedgerStore
 
 
 async def test_live_proxy_denies_readonly_write_without_touching_upstream(
-    ledger: SqliteLedgerStore,
+    ledger: SqlLedgerStore,
 ) -> None:
     # End-to-end RBAC over the real proxy path: a readonly principal's write is blocked by Cedar,
     # recorded as a deny, and the upstream is never asked to perform it (no side effect on disk).
@@ -169,7 +169,7 @@ async def test_one_bad_upstream_does_not_take_down_the_gateway() -> None:
         await upstream.aclose()
 
 
-async def test_live_proxy_unknown_tool_fails_without_forward(ledger: SqliteLedgerStore) -> None:
+async def test_live_proxy_unknown_tool_fails_without_forward(ledger: SqlLedgerStore) -> None:
     # A tool the upstream doesn't expose -> ok=False, still recorded, chain stays intact.
     upstream = McpUpstreamClient([_demo_spec()], timeout=30.0)
     pipe = _pipeline(ledger, upstream)

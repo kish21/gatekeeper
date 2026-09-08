@@ -40,7 +40,7 @@ from rich.table import Table
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.config.loader import load_config
 from gatekeeper.db.base import Base, database_url, ensure_parent_dir
 from gatekeeper.db.models import LedgerEntryRow
@@ -129,7 +129,7 @@ async def _call(
     return result
 
 
-def _render_ledger(ledger: SqliteLedgerStore) -> None:
+def _render_ledger(ledger: SqlLedgerStore) -> None:
     """Print the audit trail exactly as `gatekeeper tail` would (oldest -> newest)."""
     entries = ledger.read(limit=50)
     table = Table(title="audit ledger - every call above, hash-chained", box=box.ASCII)
@@ -173,7 +173,7 @@ async def run_demo() -> int:
     engine = create_engine(database_url(ledger_db))
     Base.metadata.create_all(engine)  # equivalent of `make migrate`, on a disposable DB
     session = Session(engine)
-    ledger = SqliteLedgerStore(session, key)
+    ledger = SqlLedgerStore(session, key)
     runtime = build_pipeline(config, hmac_key=key, ledger=ledger)
 
     _console.print(
