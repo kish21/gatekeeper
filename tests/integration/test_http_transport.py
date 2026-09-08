@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient, UpstreamSpec
 from gatekeeper.db.base import Base
@@ -43,16 +43,16 @@ ANNOTATIONS = {
 
 
 @pytest.fixture
-def ledger(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def ledger(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
     session = Session(engine)
-    store = SqliteLedgerStore(session, KEY)
+    store = SqlLedgerStore(session, KEY)
     yield store
     store.close()
 
 
-def _runtime(ledger: SqliteLedgerStore) -> GatewayRuntime:
+def _runtime(ledger: SqlLedgerStore) -> GatewayRuntime:
     upstream = McpUpstreamClient(
         [
             UpstreamSpec(
@@ -78,7 +78,7 @@ def _runtime(ledger: SqliteLedgerStore) -> GatewayRuntime:
 
 
 async def test_http_calls_run_the_same_pipeline_and_verify_clean(
-    ledger: SqliteLedgerStore,
+    ledger: SqlLedgerStore,
 ) -> None:
     fname = f"http-{uuid.uuid4().hex}.txt"
     async with serving(_runtime(ledger)) as base:
@@ -122,7 +122,7 @@ async def test_http_calls_run_the_same_pipeline_and_verify_clean(
 
 
 async def test_http_unauthenticated_is_fail_closed_and_ledgered(
-    ledger: SqliteLedgerStore,
+    ledger: SqlLedgerStore,
 ) -> None:
     async with serving(_runtime(ledger)) as base:
         # No bearer at all: tool enumeration yields NOTHING (ADR-008 — fail-closed; an empty
@@ -154,7 +154,7 @@ async def test_http_unauthenticated_is_fail_closed_and_ledgered(
     assert ledger.verify().ok
 
 
-async def test_http_rejects_unknown_host_header(ledger: SqliteLedgerStore) -> None:
+async def test_http_rejects_unknown_host_header(ledger: SqlLedgerStore) -> None:
     # ADR-009: SDK DNS-rebinding protection stays ON — a rebound Host is refused at the door.
     async with serving(_runtime(ledger)) as base:
         async with httpx.AsyncClient() as http:

@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.oidc import OidcIdentityResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient, UpstreamSpec
 from gatekeeper.db.base import Base
@@ -45,16 +45,16 @@ ANNOTATIONS = {
 
 
 @pytest.fixture
-def ledger(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def ledger(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
     session = Session(engine)
-    store = SqliteLedgerStore(session, KEY)
+    store = SqlLedgerStore(session, KEY)
     yield store
     store.close()
 
 
-def _oidc_runtime(ledger: SqliteLedgerStore) -> GatewayRuntime:
+def _oidc_runtime(ledger: SqlLedgerStore) -> GatewayRuntime:
     upstream = McpUpstreamClient(
         [
             UpstreamSpec(
@@ -81,7 +81,7 @@ def _oidc_runtime(ledger: SqliteLedgerStore) -> GatewayRuntime:
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 
 
-async def test_oidc_jwt_over_http_governs_and_ledgers(ledger: SqliteLedgerStore) -> None:
+async def test_oidc_jwt_over_http_governs_and_ledgers(ledger: SqlLedgerStore) -> None:
     fname = f"oidc-{uuid.uuid4().hex}.txt"
     async with serving(_oidc_runtime(ledger)) as base:
         # Operator-group JWT: authenticated by signature/aud/exp, authorized by group->role map.
@@ -110,7 +110,7 @@ async def test_oidc_jwt_over_http_governs_and_ledgers(ledger: SqliteLedgerStore)
     assert all(expired not in e.model_dump_json() for e in entries)
 
 
-async def test_oidc_group_membership_changes_role_not_code(ledger: SqliteLedgerStore) -> None:
+async def test_oidc_group_membership_changes_role_not_code(ledger: SqlLedgerStore) -> None:
     # Same person, different IdP group claims -> different governed role, zero gateway change:
     # exactly the "plug in the company IdP" outcome from the M3.2 scope row.
     async with serving(_oidc_runtime(ledger)) as base:

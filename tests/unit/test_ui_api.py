@@ -9,9 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.approval.sqlite import SqliteApprovalQueue
+from gatekeeper.adapters.approval.sql import SqlApprovalQueue
 from gatekeeper.adapters.ledger.factory import migrate
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.config import loader
 from gatekeeper.db.base import create_ledger_engine
 from gatekeeper.schemas.approval import ApprovalRequest
@@ -46,12 +46,12 @@ def desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, s
     monkeypatch.setenv("GATEKEEPER_CONFIG_DIR", str(Path("config").resolve()))
     loader.get_settings.cache_clear()
 
-    store = SqliteLedgerStore(Session(create_ledger_engine(db)), KEY)
+    store = SqlLedgerStore(Session(create_ledger_engine(db)), KEY)
     store.append(_entry("call-1", Verdict.PENDING, "write held for human approval"))
     store.append(_entry("call-1", Verdict.DENY, "denied by priya (request r1): nope"))
     store.append(_entry("call-2", Verdict.ALLOW, "ok", tool="read_file"))
     store.close()
-    queue = SqliteApprovalQueue(Session(create_ledger_engine(db)))
+    queue = SqlApprovalQueue(Session(create_ledger_engine(db)))
     queue.create(
         ApprovalRequest(
             id="r2000001",
@@ -66,8 +66,8 @@ def desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, s
     )
     queue.close()
 
-    def open_store() -> SqliteLedgerStore:
-        return SqliteLedgerStore(Session(create_ledger_engine(db)), KEY)
+    def open_store() -> SqlLedgerStore:
+        return SqlLedgerStore(Session(create_ledger_engine(db)), KEY)
 
     return TestClient(create_ui_app(open_store)), db
 
@@ -100,7 +100,7 @@ def test_decide_from_the_desk_writes_the_same_queue(desk: tuple[TestClient, str]
     assert r.status_code == 200 and r.json()["decided_by"] == "priya"
     assert client.get("/ui/api/pending").json() == []
     # the CLI and the gateway see the same decision
-    queue = SqliteApprovalQueue(Session(create_ledger_engine(db)))
+    queue = SqlApprovalQueue(Session(create_ledger_engine(db)))
     got = queue.get("r2000001")
     assert got is not None and got.status.value == "denied" and got.arguments_preview == ""
     # and it cannot be changed
@@ -145,7 +145,7 @@ def test_token_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loader.get_settings.cache_clear()
     client = TestClient(
         create_ui_app(
-            lambda: SqliteLedgerStore(Session(create_ledger_engine(db)), KEY), token="s3cret"
+            lambda: SqlLedgerStore(Session(create_ledger_engine(db)), KEY), token="s3cret"
         )
     )
     assert client.get("/ui").status_code == 200  # the page itself loads and asks for the token

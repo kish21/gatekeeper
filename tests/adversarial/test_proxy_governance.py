@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.db.base import Base
 from gatekeeper.db.models import LedgerEntryRow
@@ -63,11 +63,11 @@ class RefusingLedger:
 
 
 @pytest.fixture
-def store(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def store(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
     session = Session(engine)
-    yield SqliteLedgerStore(session, KEY)
+    yield SqlLedgerStore(session, KEY)
     session.close()
 
 
@@ -83,7 +83,7 @@ def _pipeline(ledger: Any, upstream: Any) -> GatewayPipeline:
 
 
 async def test_unauthenticated_call_is_denied_recorded_and_never_forwarded(
-    store: SqliteLedgerStore,
+    store: SqlLedgerStore,
 ) -> None:
     spy = SpyUpstream()
     pipe = _pipeline(store, spy)
@@ -99,7 +99,7 @@ async def test_unauthenticated_call_is_denied_recorded_and_never_forwarded(
 
 
 async def test_readonly_role_writing_is_denied_recorded_and_never_forwarded(
-    store: SqliteLedgerStore,
+    store: SqlLedgerStore,
 ) -> None:
     # The M1.2 exit criterion: an AUTHENTICATED but UNAUTHORIZED call (readonly -> write) is
     # blocked with a reason (fail-closed), recorded, and never reaches the upstream.
@@ -117,7 +117,7 @@ async def test_readonly_role_writing_is_denied_recorded_and_never_forwarded(
     assert store.verify().ok  # the deny decision is itself in the tamper-evident chain
 
 
-async def test_readonly_role_reading_is_allowed_and_forwarded(store: SqliteLedgerStore) -> None:
+async def test_readonly_role_reading_is_allowed_and_forwarded(store: SqlLedgerStore) -> None:
     # Same role, a READ tool -> allowed (proves the deny above is RBAC, not a blanket block).
     spy = SpyUpstream()
     pipe = _pipeline(store, spy)
@@ -139,7 +139,7 @@ async def test_audit_store_failure_blocks_the_forward() -> None:
     assert spy.calls == []  # audit-before-act: a failed audit means NO side effect
 
 
-async def test_tampering_with_a_recorded_result_breaks_verify(store: SqliteLedgerStore) -> None:
+async def test_tampering_with_a_recorded_result_breaks_verify(store: SqlLedgerStore) -> None:
     spy = SpyUpstream()
     pipe = _pipeline(store, spy)
     await pipe.handle(token="good", upstream="demo", tool="write_file", arguments={}, call_id="c3")

@@ -16,9 +16,9 @@ import pytest
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
-from gatekeeper.adapters.approval.sqlite import ApprovalStateError, SqliteApprovalQueue
+from gatekeeper.adapters.approval.sql import ApprovalStateError, SqlApprovalQueue
 from gatekeeper.adapters.ledger.factory import migrate
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.cli import app as cli_app
 from gatekeeper.config import loader
 from gatekeeper.db.base import create_ledger_engine
@@ -60,10 +60,10 @@ def _gateway(db: str, upstream: _Upstream, timeout_s: float = 20) -> GatewayPipe
             name_patterns=["write*"], upstream_annotations={"demo": {"writes": ["write_file"]}}
         ),
         policy=_Allow(),
-        ledger=SqliteLedgerStore(Session(engine), KEY),
+        ledger=SqlLedgerStore(Session(engine), KEY),
         upstream=upstream,
         hmac_key=KEY,
-        approvals=SqliteApprovalQueue(Session(engine)),
+        approvals=SqlApprovalQueue(Session(engine)),
         approval_policy=ApprovalPolicy(writes_require=True, timeout_s=timeout_s, poll_s=0.05),
     )
 
@@ -73,7 +73,7 @@ def _decide_in_another_process(db: str, status: str, by: str) -> None:  # child 
 
     from sqlalchemy.orm import Session as _S
 
-    from gatekeeper.adapters.approval.sqlite import SqliteApprovalQueue as _Q
+    from gatekeeper.adapters.approval.sql import SqlApprovalQueue as _Q
     from gatekeeper.db.base import create_ledger_engine as _E
     from gatekeeper.schemas.enums import ApprovalStatus as _St
 
@@ -115,7 +115,7 @@ async def test_decision_from_another_process_is_honoured(tmp_path: Path, status:
         child.join(30)
     assert child.exitcode == 0
 
-    ledger = SqliteLedgerStore(Session(create_ledger_engine(db)), KEY)
+    ledger = SqlLedgerStore(Session(create_ledger_engine(db)), KEY)
     entries = list(reversed(ledger.read(limit=10)))
     assert [e.verdict for e in entries] == expected
     assert "priya" in entries[1].reason
@@ -125,7 +125,7 @@ async def test_decision_from_another_process_is_honoured(tmp_path: Path, status:
 def test_a_decision_cannot_be_changed_or_repeated(tmp_path: Path) -> None:
     db = str(tmp_path / "audit.db")
     migrate(db)
-    queue = SqliteApprovalQueue(Session(create_ledger_engine(db)))
+    queue = SqlApprovalQueue(Session(create_ledger_engine(db)))
     queue.create(
         ApprovalRequest(
             id="abc12345",
@@ -149,7 +149,7 @@ def test_a_decision_cannot_be_changed_or_repeated(tmp_path: Path) -> None:
 def test_cli_pending_approve_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "audit.db"
     migrate(str(db))
-    queue = SqliteApprovalQueue(Session(create_ledger_engine(str(db))))
+    queue = SqlApprovalQueue(Session(create_ledger_engine(str(db))))
     for rid in ("aaaa0001", "bbbb0002"):
         queue.create(
             ApprovalRequest(

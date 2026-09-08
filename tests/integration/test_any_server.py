@@ -25,7 +25,7 @@ from mcp import types
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient, UpstreamSpec
 from gatekeeper.db.base import Base
@@ -55,15 +55,15 @@ def _time_spec() -> UpstreamSpec:
 
 
 @pytest.fixture
-def ledger(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def ledger(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
-    store = SqliteLedgerStore(Session(engine), KEY)
+    store = SqlLedgerStore(Session(engine), KEY)
     yield store
     store.close()
 
 
-def _pipeline(ledger: SqliteLedgerStore, upstream: McpUpstreamClient) -> GatewayPipeline:
+def _pipeline(ledger: SqlLedgerStore, upstream: McpUpstreamClient) -> GatewayPipeline:
     return GatewayPipeline(
         identity=StaticTokenResolver.from_config(_IDENTITIES),
         classifier=ActionClassifier(
@@ -87,7 +87,7 @@ async def test_lists_third_party_tools_for_transparent_reexposure() -> None:
         await upstream.aclose()
 
 
-async def test_governs_real_third_party_server_with_zero_code(ledger: SqliteLedgerStore) -> None:
+async def test_governs_real_third_party_server_with_zero_code(ledger: SqlLedgerStore) -> None:
     # The whole point of M1.4: a server we didn't write, governed by config alone.
     upstream = McpUpstreamClient([_time_spec()], timeout=30.0)
     pipe = _pipeline(ledger, upstream)

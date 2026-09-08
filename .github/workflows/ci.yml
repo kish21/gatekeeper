@@ -13,6 +13,20 @@ jobs:
   quality:
     name: lint · migrate · test
     runs-on: ubuntu-latest
+    # A real Postgres so the durable-ledger tests (restart survival, six concurrent replicas on one
+    # hash chain, two approvers racing one request) run for real on every push instead of skipping.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gatekeeper_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      GATEKEEPER_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/gatekeeper_test
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -24,7 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           # `.[demo]` adds the real third-party MCP server (mcp-server-time) so the M1.4
           # "govern ANY server, zero code" integration test runs for real in CI (not skipped).
-          pip install -e ".[demo]"
+          pip install -e ".[demo,postgres]"
           pip install pytest pytest-asyncio pytest-timeout ruff mypy types-PyYAML
       - name: Lint + format + types
         run: |
@@ -33,6 +47,12 @@ jobs:
           mypy
       - name: Migrate from the real schema (Alembic)
         run: alembic upgrade head
+      - name: The same migrations run on Postgres (the hosted ledger)
+        run: |
+          python -c "
+          from gatekeeper.adapters.ledger.factory import migrate
+          import os; migrate(os.environ['GATEKEEPER_TEST_POSTGRES_URL']); print('postgres schema at head')
+          "
       - name: Test
         run: pytest -q
       - name: Build + smoke-run the wheel (prod-bootstrap parity)

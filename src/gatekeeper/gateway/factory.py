@@ -12,10 +12,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.approval.sqlite import SqliteApprovalQueue
+from gatekeeper.adapters.approval.sql import SqlApprovalQueue
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.factory import open_ledger
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir, secret_source
@@ -35,7 +35,7 @@ class GatewayRuntime:
     pipeline: GatewayPipeline
     identity: IdentityResolver
     upstream: McpUpstreamClient
-    ledger: SqliteLedgerStore
+    ledger: SqlLedgerStore
 
     async def aclose(self) -> None:
         await self.upstream.aclose()
@@ -70,9 +70,9 @@ def approval_policy_from_config(product: dict[str, Any]) -> ApprovalPolicy:
     )
 
 
-def open_approvals(ledger: SqliteLedgerStore) -> SqliteApprovalQueue:
+def open_approvals(ledger: SqlLedgerStore) -> SqlApprovalQueue:
     """The approval queue lives in the ledger's database: same file, its own session."""
-    return SqliteApprovalQueue(Session(ledger.engine))
+    return SqlApprovalQueue(Session(ledger.engine))
 
 
 def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) -> ActionClassifier:
@@ -88,7 +88,7 @@ def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) 
 
 
 def build_pipeline(
-    config: dict[str, Any], *, hmac_key: str, ledger: SqliteLedgerStore
+    config: dict[str, Any], *, hmac_key: str, ledger: SqlLedgerStore
 ) -> GatewayRuntime:
     """Wire the governed pipeline from config against an injected ledger + key.
 

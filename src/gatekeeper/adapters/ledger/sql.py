@@ -1,7 +1,9 @@
-"""SQLite ``LedgerStore`` — append-only, keyed-HMAC hash-chained audit trail.
+"""SQL ``LedgerStore`` — append-only, keyed-HMAC hash-chained audit trail.
 
-Implements ``ports.ledger.LedgerStore``. ``append`` is the ONLY write path (no update/delete), so
-the log is append-only by construction. ``verify`` walks the chain and pinpoints the first break.
+Implements ``ports.ledger.LedgerStore`` over either engine the gateway supports: the local SQLite
+file or a hosted Postgres database (``gatekeeper.db.base`` decides which from config). ``append``
+is the ONLY write path (no update/delete), so the log is append-only by construction. ``verify``
+walks the chain and pinpoints the first break.
 """
 
 from __future__ import annotations
@@ -13,11 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.ledger.hashchain import compute_entry_hash
+from gatekeeper.db.base import lock_chain
 from gatekeeper.db.models import LedgerEntryRow
 from gatekeeper.schemas.ledger import GENESIS_HASH, LedgerEntry, VerifyResult
 
 
-class SqliteLedgerStore:
+class SqlLedgerStore:
     """Append + verify a tamper-evident ledger. ``key`` is the HMAC key (from .env, fail-closed)."""
 
     def __init__(self, session: Session, key: str) -> None:
@@ -44,14 +47,16 @@ class SqliteLedgerStore:
     def append(self, entry: LedgerEntry) -> LedgerEntry:
         """Chain + persist one entry. Raises on failure (so callers can fail-closed).
 
-        The read of the chain head and the insert happen in ONE write transaction (the engine
-        opens it with ``BEGIN IMMEDIATE``), so no other writer can slip in between. A failed
-        commit is rolled back before re-raising: the session stays usable, so one full disk or
-        lock timeout denies *that* call, not every call until restart. The returned entry is
-        built before the commit, so no follow-up read (which would take the write lock again and
-        hold it) is ever needed.
+        The read of the chain head and the insert happen in ONE write transaction that holds the
+        chain lock throughout (``BEGIN IMMEDIATE`` on SQLite, a transaction-scoped advisory lock on
+        Postgres), so no other writer — in this process, another process, or another replica — can
+        slip in between and fork the chain. A failed commit is rolled back before re-raising: the
+        session stays usable, so one full disk or lock timeout denies *that* call, not every call
+        until restart. The returned entry is built before the commit, so no follow-up read (which
+        would take the lock again and hold it) is ever needed.
         """
         try:
+            lock_chain(self._session)
             prev_hash = self._last_hash()
             entry_hash = compute_entry_hash(self._key, prev_hash, entry)
             # Derive columns from the model (mode="json" -> enums as values) so adding a field

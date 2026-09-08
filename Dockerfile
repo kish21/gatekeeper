@@ -22,9 +22,11 @@ RUN pip install --no-cache-dir build && python -m build --wheel
 FROM python:3.12-slim
 WORKDIR /app
 
-# The wheel (migrations included) + the demo extra (the governed third-party demo server).
+# The wheel (migrations included) + the demo extra (the governed third-party demo server) + the
+# Postgres driver, so a hosted deployment can point GATEKEEPER_LEDGER_URL at a managed database
+# and get a ledger that survives the replica — no rebuild, no second image.
 COPY --from=build /build/dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl && \
+RUN pip install --no-cache-dir "$(ls /tmp/*.whl)[postgres]" && \
     pip install --no-cache-dir "mcp-server-time>=2026.6.4" && \
     rm /tmp/*.whl
 
@@ -42,6 +44,8 @@ ENV GATEKEEPER_CONFIG_DIR=/app/config \
     GATEKEEPER_HTTP_PORT=8765 \
     GATEKEEPER_HTTP_ALLOW_NON_LOOPBACK=1 \
     GATEKEEPER_LEDGER_PATH=/data/audit.db
+# Set GATEKEEPER_LEDGER_URL to a Postgres connection string to move the ledger off the container's
+# own disk (required for durability and for more than one replica) — see docs/features/durable-ledger.md.
 
 # Non-root; /data is the ledger volume (any persistent mount).
 RUN useradd --create-home --uid 10001 gatekeeper && \

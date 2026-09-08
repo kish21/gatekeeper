@@ -33,20 +33,21 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from gatekeeper.adapters.approval.sqlite import ApprovalStateError
+from gatekeeper.adapters.approval.sql import ApprovalStateError
 from gatekeeper.adapters.ledger.factory import open_ledger
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.config.loader import (
     ENV_FILE,
     ConfigError,
     Settings,
     boot,
     get_settings,
-    ledger_path,
+    ledger_target,
     load_config,
     policy_dir,
     validate_security,
 )
+from gatekeeper.db.base import is_url, redact_url
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.schemas.enums import ApprovalStatus, Verdict
 
@@ -74,8 +75,38 @@ _ENV_HMAC = "GATEKEEPER_HMAC_KEY"
 _ENV_AGENT_TOKEN = "GATEKEEPER_AGENT_TOKEN"  # noqa: S105 — a variable NAME, not a value
 
 
+def _ledger_label(config: dict[str, Any]) -> str:
+    """Where the ledger lives, safe to print: a file path, or a password-redacted Postgres URL."""
+    target = ledger_target(config)
+    return target if not is_url(target) else f"{redact_url(target)}  (postgres)"
+
+
+def _durability_check(config: dict[str, Any]) -> tuple[str, bool, str]:
+    """Is the audit trail going to survive this deployment?
+
+    A SQLite file is right on one machine and wrong the moment the gateway is a container that can
+    be replaced: the file goes with it, and on an SMB share it corrupts instead of failing loudly.
+    So a network-facing gateway on the file ledger is reported as a FAILED check with the fix,
+    rather than as a footnote someone reads after losing an audit trail.
+    """
+    target = ledger_target(config)
+    listens_on_network = bool(
+        config["platform"].get("transport", {}).get("http_allow_non_loopback", False)
+    )
+    if is_url(target):
+        return ("ledger durability", True, "postgres: survives a restart, safe with many replicas")
+    if listens_on_network:
+        return (
+            "ledger durability",
+            False,
+            "this gateway is network-facing but keeps its ledger in a local SQLite file, which is "
+            "lost when the container is replaced. Set GATEKEEPER_LEDGER_URL to a Postgres database",
+        )
+    return ("ledger durability", True, "sqlite file: fine for one machine (loopback only)")
+
+
 @contextmanager
-def _opened_ledger() -> Iterator[SqliteLedgerStore]:
+def _opened_ledger() -> Iterator[SqlLedgerStore]:
     """Open the ledger, map a misconfig to exit 2, and always close it (shared by commands)."""
     try:
         store = open_ledger()
@@ -187,7 +218,7 @@ def init() -> None:
         "secrets file",
         f"{env_path}  ({'wrote ' + ', '.join(written) if written else 'kept as is'})",
     )
-    table.add_row("audit ledger", f"{ledger_path(config)}  ({entries} entries, chain intact)")
+    table.add_row("audit ledger", f"{_ledger_label(config)}  ({entries} entries, chain intact)")
     table.add_row("demo sandbox", f"{sandbox} ({_DEMO_SAMPLE_FILE})")
     table.add_row("governed servers", ", ".join(str(u.get("name")) for u in config["upstreams"]))
     _console.print(table)
@@ -282,13 +313,15 @@ def doctor(
                 (
                     "audit ledger",
                     result.ok,
-                    f"{ledger_path(config)} ({result.checked} entries, {result.detail})",
+                    f"{_ledger_label(config)} ({result.checked} entries, {result.detail})",
                 )
             )
         except typer.Exit:
             checks.append(("audit ledger", False, "cannot open (see error above)"))
     else:
         checks.append(("audit ledger", False, "skipped: no HMAC key"))
+
+    checks.append(_durability_check(config))
 
     try:
         from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
@@ -361,7 +394,7 @@ def health() -> None:
     table = Table(title="GateKeeperAI - health", show_header=False, box=box.ASCII)
     table.add_row("env", settings.env)
     table.add_row("HMAC key", "set (validated, fail-closed)")
-    table.add_row("audit ledger", ledger_path(config))
+    table.add_row("audit ledger", _ledger_label(config))
     table.add_row("policy dir", policy_dir(config))
     table.add_row("adapters", ", ".join(f"{k}={v}" for k, v in adapters.items()))
     table.add_row("transport", str(platform.get("transport", {}).get("mode", "stdio")))

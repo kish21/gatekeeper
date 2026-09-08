@@ -391,7 +391,7 @@ network-exposure trigger documented *and enforced* at the boundary.
 
 **New ADRs (load-bearing):**
 - **ADR-007 — Single-worker serving preserves the ledger's single-writer assumption *by construction*.**
-  `SqliteLedgerStore.append` is a **sync** read-prev-hash → insert (verified in code) with a documented
+  `SqlLedgerStore.append` is a **sync** read-prev-hash → insert (verified in code) with a documented
   single-writer assumption; HTTP introduces concurrent sessions for the first time. Under **one** uvicorn
   worker/event loop a sync append contains no `await`, so two appends can never interleave — the hash
   chain cannot race, with **no new lock layer**. Enforced: `serve` exposes no `workers` knob; M3.3

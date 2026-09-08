@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
     config_dir: Path = Field(default=Path("./config"))
     ledger_path: str = Field(default="", description="Overrides platform.yaml ledger.path.")
+    ledger_url: str = Field(
+        default="",
+        description="Postgres URL for a hosted, durable ledger. Set = the ledger lives there and "
+        "ledger.path is ignored; unset = the SQLite file at ledger.path.",
+    )
     policy_dir: str = Field(default="", description="Overrides platform.yaml policy.dir.")
 
     # --- transport (overrides platform.yaml transport.*) ---------------------------------------
@@ -145,6 +150,16 @@ PLACEHOLDER_TOKEN_SUFFIX = "-REPLACE-ME"  # noqa: S105 — a marker, not a crede
 def ledger_path(config: dict[str, Any]) -> str:
     """The configured ledger DB path (platform.yaml -> ledger.path), or the default. One source."""
     return str(config["platform"].get("ledger", {}).get("path", DEFAULT_LEDGER_PATH))
+
+
+def ledger_target(config: dict[str, Any]) -> str:
+    """Where the ledger lives: the Postgres URL if one is configured, else the SQLite path.
+
+    One function so every caller — the store, the migrations, the CLI, the desk — resolves the
+    ledger the same way and a hosted deployment can move it with one environment variable.
+    """
+    url = str(config["platform"].get("ledger", {}).get("url", "") or "").strip()
+    return url or ledger_path(config)
 
 
 def policy_dir(config: dict[str, Any]) -> str:
@@ -234,6 +249,8 @@ def _apply_env_overrides(config: dict[str, Any], settings: Settings) -> None:
 
     if settings.ledger_path:
         platform.setdefault("ledger", {})["path"] = settings.ledger_path
+    if settings.ledger_url:
+        platform.setdefault("ledger", {})["url"] = settings.ledger_url
     if settings.policy_dir:
         platform.setdefault("policy", {})["dir"] = settings.policy_dir
 

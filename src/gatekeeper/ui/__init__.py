@@ -23,8 +23,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from gatekeeper.adapters.approval.sqlite import ApprovalStateError
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.approval.sql import ApprovalStateError
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.config.loader import ConfigError, get_settings, load_config
 from gatekeeper.gateway.factory import open_approvals
 from gatekeeper.schemas.enums import ApprovalStatus, Verdict
@@ -51,7 +51,7 @@ def _require_token(request: Request, token: str) -> None:
     raise HTTPException(status_code=401, detail="UI token required")
 
 
-def _group_calls(store: SqliteLedgerStore, limit: int) -> list[dict[str, Any]]:
+def _group_calls(store: SqlLedgerStore, limit: int) -> list[dict[str, Any]]:
     """Newest-first ledger rows -> one record per call: ordered entries + final verdict."""
     rows = store.read(limit=limit)
     calls: dict[str, dict[str, Any]] = {}
@@ -86,7 +86,7 @@ def _group_calls(store: SqliteLedgerStore, limit: int) -> list[dict[str, Any]]:
     return ordered
 
 
-def build_router(open_store: Callable[[], SqliteLedgerStore], *, token: str = "") -> APIRouter:
+def build_router(open_store: Callable[[], SqlLedgerStore], *, token: str = "") -> APIRouter:
     """The UI routes. ``open_store`` opens a fresh ledger store per request (cross-process safe)."""
     router = APIRouter()
 
@@ -214,7 +214,7 @@ def build_router(open_store: Callable[[], SqliteLedgerStore], *, token: str = ""
     return router
 
 
-def create_ui_app(open_store: Callable[[], SqliteLedgerStore], *, token: str = "") -> FastAPI:
+def create_ui_app(open_store: Callable[[], SqlLedgerStore], *, token: str = "") -> FastAPI:
     """A standalone app for ``gatekeeper ui``."""
     app = FastAPI(title="GateKeeperAI", docs_url=None, redoc_url=None)
     app.include_router(build_router(open_store, token=token))

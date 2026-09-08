@@ -55,7 +55,7 @@ from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.hashchain import compute_entry_hash, compute_payload_hash
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.config.loader import load_config
 from gatekeeper.db import models as _models  # noqa: F401 — registers ledger_entry on Base.metadata
@@ -155,7 +155,7 @@ async def _run(iters: int) -> int:
     tmp = Path(tempfile.mkdtemp(prefix="gk-bench-")) / "bench.db"
     engine = create_engine(f"sqlite:///{tmp}")
     Base.metadata.create_all(engine)  # the REAL ledger_entry schema (same table as the migration)
-    ledger = SqliteLedgerStore(Session(engine), key=secrets.token_hex(32))
+    ledger = SqlLedgerStore(Session(engine), key=secrets.token_hex(32))
 
     pipeline = GatewayPipeline(
         identity=identity,
@@ -287,7 +287,7 @@ def _sample_entry() -> LedgerEntry:
     )
 
 
-def _make_store(journal: str | None, sync: str | None, key: str) -> SqliteLedgerStore:
+def _make_store(journal: str | None, sync: str | None, key: str) -> SqlLedgerStore:
     """A real file-backed ledger store, optionally with explicit journal/synchronous PRAGMAs."""
     tmp = Path(tempfile.mkdtemp(prefix="gk-diag-")) / "diag.db"
     engine = create_engine(f"sqlite:///{tmp}")
@@ -303,7 +303,7 @@ def _make_store(journal: str | None, sync: str | None, key: str) -> SqliteLedger
             cur.close()
 
     Base.metadata.create_all(engine)
-    return SqliteLedgerStore(Session(engine), key=key)
+    return SqlLedgerStore(Session(engine), key=key)
 
 
 def _diagnose(iters: int) -> int:

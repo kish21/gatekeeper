@@ -26,7 +26,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.config.loader import load_config
 from gatekeeper.db.base import Base
@@ -68,16 +68,16 @@ class _SpyUpstream:
 
 
 @pytest.fixture
-def store(tmp_path: Any) -> Iterator[SqliteLedgerStore]:
+def store(tmp_path: Any) -> Iterator[SqlLedgerStore]:
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
     Base.metadata.create_all(engine)
     session = Session(engine)
-    yield SqliteLedgerStore(session, KEY)
+    yield SqlLedgerStore(session, KEY)
     session.close()
 
 
 def _pipeline(
-    store: SqliteLedgerStore, upstream: Any, classifier: ActionClassifier
+    store: SqlLedgerStore, upstream: Any, classifier: ActionClassifier
 ) -> GatewayPipeline:
     # REAL Cedar policy + REAL ledger; identity and the tool index are the only fakes, so the
     # classification->RBAC seam is exercised exactly as in production.
@@ -119,7 +119,7 @@ def test_real_config_classifies_an_evasive_destructive_tool_as_read() -> None:
 
 
 async def test_unannotated_destructive_tool_slips_past_readonly_rbac(
-    store: SqliteLedgerStore,
+    store: SqlLedgerStore,
 ) -> None:
     """HONEST LIMITATION (pinned): readonly reaches an unannotated destructive tool.
 
@@ -150,7 +150,7 @@ async def test_unannotated_destructive_tool_slips_past_readonly_rbac(
     assert store.verify().ok
 
 
-async def test_annotating_the_destructive_tool_closes_the_gap(store: SqliteLedgerStore) -> None:
+async def test_annotating_the_destructive_tool_closes_the_gap(store: SqlLedgerStore) -> None:
     """The mitigation that exists TODAY: annotate the tool as a write in upstreams.yaml.
 
     With ``drop_table`` declared a write, the classifier returns WRITE, the readonly permit no
@@ -182,7 +182,7 @@ async def test_annotating_the_destructive_tool_closes_the_gap(store: SqliteLedge
 # --- 2. Read access-scoping ------------------------------------------------------------------
 
 
-def _seed(store: SqliteLedgerStore, principal: str, call_id: str) -> None:
+def _seed(store: SqlLedgerStore, principal: str, call_id: str) -> None:
     store.append(
         LedgerEntry(
             call_id=call_id,
@@ -201,7 +201,7 @@ def _seed(store: SqliteLedgerStore, principal: str, call_id: str) -> None:
     )
 
 
-def test_read_is_scoped_by_principal(store: SqliteLedgerStore) -> None:
+def test_read_is_scoped_by_principal(store: SqlLedgerStore) -> None:
     # Within-tenant owner isolation: bob must not see alice's entries via a principal-scoped read.
     _seed(store, "alice", "a1")
     _seed(store, "bob", "b1")
@@ -215,7 +215,7 @@ def test_read_is_scoped_by_principal(store: SqliteLedgerStore) -> None:
     assert {e.call_id for e in alice_view} == {"a1", "a2"}
 
 
-def test_get_is_not_principal_scoped_known_limitation(store: SqliteLedgerStore) -> None:
+def test_get_is_not_principal_scoped_known_limitation(store: SqlLedgerStore) -> None:
     """Pinned limitation: ``get(call_id)`` is NOT principal/tenant-scoped (see PRODUCT.md#Tests).
 
     Anyone holding a ``call_id`` retrieves that decision regardless of owner. Safe today (single

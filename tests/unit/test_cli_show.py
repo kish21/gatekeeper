@@ -1,6 +1,6 @@
 """CLI tests for ``gatekeeper show <call_id>`` — inspect one recorded decision.
 
-``open_ledger`` is monkeypatched to a temp-backed real ``SqliteLedgerStore`` so we exercise the
+``open_ledger`` is monkeypatched to a temp-backed real ``SqlLedgerStore`` so we exercise the
 actual command + the real ``get()`` path without touching the dev ledger. Asserts exit codes and
 that no token/HMAC key ever leaks into the rendered output.
 """
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.cli import app as cli_app
 from gatekeeper.db.base import Base
 from gatekeeper.schemas.enums import ActionKind, Verdict
@@ -51,7 +51,7 @@ def seeded_db(tmp_path: Any, monkeypatch: Any) -> Iterator[str]:
     db_path = str(tmp_path / "audit.db")
     engine = sa.create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
-    seed = SqliteLedgerStore(Session(engine), KEY)
+    seed = SqlLedgerStore(Session(engine), KEY)
     seed.append(_entry("call-allow"))
     seed.append(
         _entry(
@@ -66,8 +66,8 @@ def seeded_db(tmp_path: Any, monkeypatch: Any) -> Iterator[str]:
     seed.close()
 
     # Each command opens its own store (the real ctx manager closes it) -> hand back a fresh one.
-    def _fake_open(*_a: Any, **_k: Any) -> SqliteLedgerStore:
-        return SqliteLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
+    def _fake_open(*_a: Any, **_k: Any) -> SqlLedgerStore:
+        return SqlLedgerStore(Session(sa.create_engine(f"sqlite:///{db_path}")), KEY)
 
     monkeypatch.setenv("GATEKEEPER_HMAC_KEY", GOOD_HMAC)
     monkeypatch.setattr(cli_app, "open_ledger", _fake_open)

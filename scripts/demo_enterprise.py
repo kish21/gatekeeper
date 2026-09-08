@@ -55,7 +55,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.identity.oidc import OidcIdentityResolver
-from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
+from gatekeeper.adapters.ledger.sql import SqlLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import load_config, secret_source
@@ -185,7 +185,7 @@ async def _call(
     return result
 
 
-def _render_ledger(console: Console, ledger: SqliteLedgerStore) -> None:
+def _render_ledger(console: Console, ledger: SqlLedgerStore) -> None:
     """Print the audit trail (oldest -> newest): principal + role come from the validated JWT."""
     entries = ledger.read(limit=50)
     table = Table(
@@ -209,7 +209,7 @@ def _build_runtime(
     config: dict[str, Any],
     *,
     key: str,
-    ledger: SqliteLedgerStore,
+    ledger: SqlLedgerStore,
     metrics: GatewayMetrics,
     jwks: _StubJwks,
 ) -> GatewayRuntime:
@@ -282,7 +282,7 @@ async def run_enterprise_demo(console: Console | None = None) -> int:
     engine = create_engine(database_url(ledger_db))
     Base.metadata.create_all(engine)  # equivalent of `make migrate`, on a disposable DB
     db_session = Session(engine)
-    ledger = SqliteLedgerStore(db_session, key)
+    ledger = SqlLedgerStore(db_session, key)
     metrics = GatewayMetrics()  # this run's live metrics; /metrics reads the same instance
     runtime = _build_runtime(config, key=key, ledger=ledger, metrics=metrics, jwks=jwks)
     budget_ms = float(config["platform"].get("perf", {}).get("overhead_p95_ms", 10.0))

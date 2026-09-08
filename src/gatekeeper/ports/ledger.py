@@ -1,4 +1,4 @@
-"""Ledger port: append-only, tamper-evident audit store. Implemented by adapters.ledger.sqlite."""
+"""Ledger port: append-only, tamper-evident audit store. Implemented by adapters.ledger.sql."""
 
 from __future__ import annotations
 
