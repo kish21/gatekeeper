@@ -22,3 +22,7 @@ class PolicyDenied(GatewayError):
 
 class UpstreamError(GatewayError):
     """A registered upstream could not be reached or returned a transport-level failure."""
+
+
+class ApprovalDenied(GatewayError):
+    """A held write was denied by a human, timed out, or was cancelled. Never forwarded."""

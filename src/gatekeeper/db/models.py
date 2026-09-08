@@ -1,7 +1,8 @@
 """ORM persistence models. The physical schema is built by Alembic migrations (never hand-edited);
 this metadata must stay in lockstep with the migration so ``--autogenerate`` shows no drift.
 
-``LedgerEntryRow`` mirrors ``schemas.ledger.LedgerEntry`` field-for-field.
+``LedgerEntryRow`` mirrors ``schemas.ledger.LedgerEntry`` field-for-field;
+``ApprovalRequestRow`` mirrors ``schemas.approval.ApprovalRequest``.
 """
 
 from __future__ import annotations
@@ -42,3 +43,22 @@ class LedgerEntryRow(Base):
         UniqueConstraint("entry_hash", name="uq_ledger_entry_hash"),
         Index("ix_ledger_principal_ts", "principal", "ts"),
     )
+
+
+class ApprovalRequestRow(Base):
+    """A write held for human approval (table ``approval_request``)."""
+
+    __tablename__ = "approval_request"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    call_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    ts: Mapped[str] = mapped_column(String, nullable=False)
+    principal: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    upstream: Mapped[str] = mapped_column(String, nullable=False)
+    tool: Mapped[str] = mapped_column(String, nullable=False)
+    arguments_preview: Mapped[str] = mapped_column(String, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending", index=True)
+    decided_by: Mapped[str] = mapped_column(String, nullable=False, default="")
+    decided_at: Mapped[str] = mapped_column(String, nullable=False, default="")
+    note: Mapped[str] = mapped_column(String, nullable=False, default="")

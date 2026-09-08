@@ -12,7 +12,7 @@ does and how a customer would use it — without reading code. A diagram version
 
 Every time the AI tries to *do* something — read a file, create a GitHub issue, send a message —
 the guard checks who's asking, checks the rulebook, writes it in a tamper-proof logbook, and only
-then lets it through (or blocks it).
+then lets it through (or blocks it). A change waits until a person says yes.
 
 ---
 
@@ -161,12 +161,13 @@ Be precise with customers — don't oversell:
 | Run **over the network** so a whole team shares one gateway (not one laptop) | ✅ Works today (HTTPS added by Azure when you deploy — guide ready) |
 | **Enterprise login** (OIDC — Entra ID / Okta / Google) instead of static badges | ✅ Works today (plug in your tenant by config) |
 | **Live health metrics + tamper / deny alerts** | ✅ Works today |
-| **A human approves risky writes before they happen** | 🔜 Coming (next milestone) |
-| **AI risk-scores each action to decide what needs approval** | 🔜 Coming (next milestone) |
+| **A human approves writes before they happen** (named, with a reason, timeout = no) | ✅ Works today |
+| **AI risk-scores each action so only risky writes need approval** | 🔜 Coming (next milestone) |
 
-> Today, an **operator's** writes go straight through (and are fully logged). The *human-approval
-> step* for risky writes is the **next milestone** — so don't claim "every write needs sign-off"
-> yet. A **read-only** badge is already blocked from writing, today.
+> Today, an **operator's** writes wait for a person to approve them (`gatekeeper approve`), and
+> a **read-only** badge is blocked from writing outright. What is not built yet is the AI scoring
+> that would let routine writes pass without a person — so say "a person approves writes", not
+> "the AI decides which writes need a person".
 
 > **Showing the enterprise version?** The hosted story — HTTPS, your real corporate login, and Azure —
 > has its own plain-English guide with a "what to show on a call" demo script:

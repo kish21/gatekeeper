@@ -2,8 +2,9 @@
 
 Start with whichever of these matches you:
 
-- **New to GateKeeper?** [USE-CASE-STORY.md](USE-CASE-STORY.md) tells the use case as a story, then
-  [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains the parts in plain English.
+- **New to GateKeeper?** [WALKTHROUGH.md](WALKTHROUGH.md) is one afternoon with it, pasted from a
+  real run: a write held, denied, approved, and the record verified. [USE-CASE-STORY.md](USE-CASE-STORY.md)
+  tells the use case as a story, and [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains the parts.
 - **Want to run it?** [getting-started.md](getting-started.md): install, `init`, `doctor`, connect your
   MCP host, read the audit trail.
 - **Deploying for a team?** [deploy/azure-container-apps.md](deploy/azure-container-apps.md), one command

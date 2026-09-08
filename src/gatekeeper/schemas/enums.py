@@ -18,3 +18,14 @@ class Verdict(StrEnum):
 
     ALLOW = "allow"
     DENY = "deny"
+    PENDING = "pending"  # held for human approval; always followed by an allow or a deny entry
+
+
+class ApprovalStatus(StrEnum):
+    """Lifecycle of a held write. Only ``pending`` can change; every other state is final."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"  # nobody decided within the timeout -> treated as a deny
+    CANCELLED = "cancelled"  # the caller went away while waiting -> never forwarded

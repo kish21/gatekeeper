@@ -109,3 +109,15 @@ def test_show_output_is_legacy_windows_console_safe(seeded_db: str):
     result = runner.invoke(cli_app.app, ["show", "call-allow"])
     assert result.exit_code == 0
     result.output.encode("cp1252")  # box.ASCII -> no glyphs that crash a cp1252 console
+
+
+def test_show_accepts_a_unique_prefix(seeded_db: str):
+    result = runner.invoke(cli_app.app, ["show", "call-al"])
+    assert result.exit_code == 0, result.output
+    assert "call-allow" in result.output
+
+
+def test_show_rejects_an_ambiguous_prefix(seeded_db: str):
+    result = runner.invoke(cli_app.app, ["show", "call-"])  # matches call-allow AND call-deny
+    assert result.exit_code == 1
+    assert "ambiguous" in result.output

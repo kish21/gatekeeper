@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.orm import Session
+
+from gatekeeper.adapters.approval.sqlite import SqliteApprovalQueue
 from gatekeeper.adapters.identity.static_token import StaticTokenResolver
 from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
@@ -17,7 +20,7 @@ from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir, secret_source
 from gatekeeper.domain.classify import ActionClassifier
-from gatekeeper.gateway.pipeline import GatewayPipeline
+from gatekeeper.gateway.pipeline import ApprovalPolicy, GatewayPipeline
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
@@ -57,6 +60,21 @@ def _build_policy(platform: dict[str, Any]) -> PolicyEngine:
     return CedarPolicyEngine.from_config(policy_dir({"platform": platform}))  # fail-loud
 
 
+def approval_policy_from_config(product: dict[str, Any]) -> ApprovalPolicy:
+    """``product.yaml`` ``approval`` -> the pipeline's hold rule (writes: require | off)."""
+    approval = product.get("approval", {}) or {}
+    return ApprovalPolicy(
+        writes_require=str(approval.get("writes", "off")).lower() == "require",
+        timeout_s=float(approval.get("timeout_s", 90)),
+        exempt_roles=frozenset(str(r) for r in (approval.get("exempt_roles") or [])),
+    )
+
+
+def open_approvals(ledger: SqliteLedgerStore) -> SqliteApprovalQueue:
+    """The approval queue lives in the ledger's database: same file, its own session."""
+    return SqliteApprovalQueue(Session(ledger.engine))
+
+
 def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) -> ActionClassifier:
     write_detection = product.get("write_detection", {})
     annotations = {
@@ -92,6 +110,10 @@ def build_pipeline(
     )
     # secret_source() lets an upstream credential ({from_env: NAME}) resolve from .env / the real
     # environment — so a token (e.g. GitHub's) never has to be written into config/upstreams.yaml.
+    # A server without an explicit cwd launches from the project root, so `python -m examples...`
+    # style launchers work no matter which directory the MCP host started the gateway from.
+    root = str(get_settings().project_root)
+    upstreams = [{"cwd": root, **u} for u in upstreams]
     upstream = McpUpstreamClient.from_config(
         upstreams, timeout=timeout, secret_source=secret_source()
     )
@@ -105,6 +127,7 @@ def build_pipeline(
     )
     alerter = WebhookAlerter(get_settings().alert_webhook)
 
+    approval_policy = approval_policy_from_config(product)
     pipeline = GatewayPipeline(
         identity=identity,
         classifier=classifier,
@@ -114,6 +137,8 @@ def build_pipeline(
         hmac_key=hmac_key,
         deny_detector=deny_detector,
         alerter=alerter,
+        approvals=open_approvals(ledger) if approval_policy.writes_require else None,
+        approval_policy=approval_policy,
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 

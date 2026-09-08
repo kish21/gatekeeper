@@ -15,19 +15,20 @@ gatekeeper/
 │   ├── upstreams.yaml      #   the governed servers: how to launch each, which tools are writes
 │   ├── identities.yaml     #   demo tokens -> principal -> role (refused on a public bind)
 │   ├── platform.yaml       #   how the gateway runs; every knob has a GATEKEEPER_* env var
-│   └── product.yaml        #   how a tool name is guessed to be a write when unannotated
+│   └── product.yaml        #   which writes are held for a human, for how long; write-name patterns
 ├── policies/gatekeeper.cedar   # the rulebook: role x read/write -> allow; deny by default
 │
 ├── src/gatekeeper/         # ── the package ──
-│   ├── cli/                #   `gatekeeper` init · doctor · serve · tail · verify · show · stats
+│   ├── cli/                #   `gatekeeper` init · doctor · serve · pending · approve · deny · tail · verify · show · stats
 │   ├── transport/          #   MCP bindings: stdio (one identity per process) and HTTP (per-request)
-│   ├── gateway/            #   the pipeline: identity -> classify -> policy -> audit -> forward -> audit
+│   ├── gateway/            #   the pipeline: identity -> classify -> policy -> [hold for a human] -> audit -> forward -> audit
 │   ├── domain/             #   pure logic: read/write classification, error types
-│   ├── ports/              #   the interfaces: IdentityResolver, PolicyEngine, LedgerStore, UpstreamClient
+│   ├── ports/              #   the interfaces: IdentityResolver, PolicyEngine, LedgerStore, UpstreamClient, ApprovalQueue
 │   ├── adapters/           #   the implementations (the only SDK imports)
 │   │   ├── identity/       #     static_token · oidc
 │   │   ├── policy/         #     cedar
 │   │   ├── ledger/         #     sqlite (WAL, single writer) + the keyed-HMAC hash chain + auto-migrate
+│   │   ├── approval/       #     sqlite queue of held writes, decided from another process
 │   │   └── upstream/       #     mcp_client: launches governed servers with a minimal environment
 │   ├── schemas/            #   typed DTOs: ToolCall, ToolResult, Principal, Decision, LedgerEntry
 │   ├── config/             #   loader: .env + YAML + GATEKEEPER_* overrides, project-root paths
@@ -35,7 +36,7 @@ gatekeeper/
 │   └── infra/              #   JSON logging, metrics, alerts
 │
 ├── deploy/container/entrypoint.sh   # `exec gatekeeper serve`
-├── scripts/                # demo.py · demo_enterprise.py · deploy_azure.sh · probe_hosted.py · windows/*.bat
+├── scripts/                # demo.py · demo_enterprise.py · agent.py (a stand-in assistant) · deploy_azure.sh · probe_hosted.py · windows/*.bat
 ├── examples/               # demo_file_server.py — the governed demo target (read + write tools)
 ├── tests/                  # unit · integration · adversarial · golden (RBAC dataset) · eval (benchmarks)
 └── docs/                   # getting-started · deploy · features · runbooks · glossary · internal/

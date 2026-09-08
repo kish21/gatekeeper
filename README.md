@@ -12,10 +12,14 @@ When an AI assistant can read files, open tickets, or change records, three ques
 | Question | Without GateKeeper | With GateKeeper |
 |---|---|---|
 | Who is the AI acting as? | A shared password nobody can trace | Every call carries an identity and a role, recorded on every line |
-| What is it allowed to do? | Whatever it can be talked into | A readable rulebook; read-only roles cannot write, full stop |
+| What is it allowed to do? | Whatever it can be talked into | A readable rulebook, and a write waits until a named human says yes |
 | What did it actually do? | A log file anyone could edit | A hash-chained ledger you can *prove* was never altered |
 
 The last row is the point. You do not have to trust the gateway. You can check it.
+
+**Five minutes, pasted from a real run:** [One afternoon with GateKeeper](docs/WALKTHROUGH.md)
+shows an assistant's write being held, denied by a person with a reason, approved on the second
+try, and the whole record verified.
 
 ## See it in one command
 
@@ -77,13 +81,24 @@ gatekeeper doctor    # checks everything, then prints the block to paste into yo
 ```
 
 From then on the host launches the gateway, the gateway launches the governed servers, and every
-call goes through the guard. Look at what happened whenever you like:
+call goes through the guard. Reads pass. A write waits for you:
+
+```bash
+gatekeeper pending            # writes waiting for a human, with what they want to change
+gatekeeper approve <id>       # recorded under your name, then carried out
+gatekeeper deny <id> --reason "not yet"   # recorded, never carried out
+```
+
+Look at what happened whenever you like:
 
 ```bash
 gatekeeper tail --with-id     # the audit trail
-gatekeeper show <call_id>     # one recorded decision, with its reason
+gatekeeper show <id>          # one call: who, what, each decision, the outcome
 gatekeeper verify             # exit 0 = untampered; prints a head hash you can pin
 ```
+
+No assistant installed yet? `python -m scripts.agent read_file path=welcome.txt` makes one call
+through the real gateway the way an assistant would.
 
 Full walkthrough, including what each file means: [Getting started](docs/getting-started.md).
 
@@ -122,15 +137,16 @@ See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is an
 | Capability | Status |
 |---|---|
 | Every call authenticated, policy-checked, recorded before it is forwarded | Works today |
+| Writes held for a named human to approve or deny, with a timeout that counts as no | Works today |
 | Tamper-evident ledger; `verify` pinpoints any altered, inserted, or removed record | Works today |
 | Any MCP server governed by config alone, credentials referenced by name | Works today |
 | HTTP transport, OIDC login, container image, `/metrics`, deny-spike alerts | Works today |
 | One-command Azure deploy with fresh per-deployment tokens | Works today; the hosted ledger is not yet durable across restarts |
-| AI risk-scoring of writes and human approval before they run | Next milestone, not built |
+| AI risk-scoring so only risky writes need approval | Next milestone, not built |
 
 ## Learn more
 
-- [The use case, as a story](docs/USE-CASE-STORY.md) if GateKeeper is new to you
+- [One afternoon with GateKeeper](docs/WALKTHROUGH.md), the real run, and [the use case as a story](docs/USE-CASE-STORY.md)
 - [How it works](docs/HOW-IT-WORKS.md) in plain English, and [GateKeeper on Azure](docs/SHOWCASE-AZURE.md)
 - [Glossary](docs/glossary.md), [feature docs](docs/features/), [codebase map](STRUCTURE.md)
 - Design history and decision records: [docs/internal/PRODUCT.md](docs/internal/PRODUCT.md)

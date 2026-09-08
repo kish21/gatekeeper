@@ -1,6 +1,12 @@
 """The Policy Enforcement Point (PEP) — the governed pipeline every tool call passes through.
 
-Chain (M1.2): ``identity -> classify -> POLICY(RBAC) -> AUDIT(decision) -> forward -> AUDIT``.
+Chain: ``identity -> classify -> POLICY -> [HOLD for human approval] -> AUDIT -> forward -> AUDIT``.
+
+A write the policy allows can still be HELD: when approval is configured, the call is recorded as
+``pending``, an approval request is queued, and the pipeline waits for a human to run
+``gatekeeper approve`` or ``gatekeeper deny`` (or for the timeout). Approved -> an ``allow`` entry
+naming the approver, then the forward. Denied, timed out, or cancelled -> a ``deny`` entry, never
+forwarded. Reads are never held.
 The Cedar ``PolicyEngine`` now decides allow/deny per (role x action x tool); an authenticated but
 *unauthorized* call (e.g. a ``readonly`` role calling a write) is denied with a reason and recorded,
 exactly like an unknown token — never forwarded.
@@ -22,34 +28,61 @@ The pipeline is SDK-free: it speaks only typed DTOs + ports, so it is fully unit
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from gatekeeper.adapters.ledger.hashchain import compute_payload_hash
 from gatekeeper.domain.classify import ActionClassifier
-from gatekeeper.domain.errors import IdentityError, PolicyDenied
+from gatekeeper.domain.errors import ApprovalDenied, IdentityError, PolicyDenied
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.infra.logging import get_logger
 from gatekeeper.infra.metrics import GatewayMetrics, default_metrics
 from gatekeeper.infra.tracing import ErrorReporter, default_reporter
+from gatekeeper.ports.approval import ApprovalQueue
 from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.ledger import LedgerStore
 from gatekeeper.ports.policy import PolicyEngine
 from gatekeeper.ports.upstream import UpstreamClient
-from gatekeeper.schemas.enums import ActionKind, Verdict
+from gatekeeper.schemas.approval import ARGUMENTS_PREVIEW_MAX, ApprovalRequest
+from gatekeeper.schemas.enums import ActionKind, ApprovalStatus, Verdict
 from gatekeeper.schemas.ledger import LedgerEntry
-from gatekeeper.schemas.models import Principal, ToolCall, ToolResult
+from gatekeeper.schemas.models import Decision, Principal, ToolCall, ToolResult
 
 #: Recorded as the principal/role of a call whose token could not be authenticated.
 UNAUTHENTICATED_PRINCIPAL = "<unauthenticated>"
 UNAUTHENTICATED_ROLE = "<none>"
 
 
+@dataclass(frozen=True)
+class ApprovalPolicy:
+    """When a policy-allowed call is still held for a human (from ``product.yaml`` ``approval``)."""
+
+    writes_require: bool = False
+    timeout_s: float = 90.0
+    exempt_roles: frozenset[str] = field(default_factory=frozenset)
+    poll_s: float = 0.5
+
+    def applies(self, role: str, action: ActionKind) -> bool:
+        return self.writes_require and action is ActionKind.WRITE and role not in self.exempt_roles
+
+
 def _utc_now_iso() -> str:
     """Current time as a UTC ISO-8601 string (the ledger's ``ts`` contract)."""
     return datetime.now(UTC).isoformat()
+
+
+def _approval_deny_reason(outcome: ApprovalRequest, timeout_s: float) -> str:
+    if outcome.status is ApprovalStatus.DENIED:
+        note = f": {outcome.note}" if outcome.note else ""
+        return f"denied by {outcome.decided_by} (request {outcome.id}){note}"
+    if outcome.status is ApprovalStatus.EXPIRED:
+        return f"approval timed out after {timeout_s:g}s (request {outcome.id})"
+    return f"approval {outcome.status.value} (request {outcome.id})"
 
 
 class GatewayPipeline:
@@ -69,6 +102,8 @@ class GatewayPipeline:
         metrics: GatewayMetrics = default_metrics,
         deny_detector: DenySpikeDetector | None = None,
         alerter: WebhookAlerter | None = None,
+        approvals: ApprovalQueue | None = None,
+        approval_policy: ApprovalPolicy | None = None,
     ) -> None:
         self._identity = identity
         self._classifier = classifier
@@ -81,6 +116,8 @@ class GatewayPipeline:
         self._metrics = metrics
         self._deny_detector = deny_detector
         self._alerter = alerter
+        self._approvals = approvals
+        self._approval_policy = approval_policy or ApprovalPolicy()
         self._log = get_logger("gatekeeper.gateway")
 
     async def handle(
@@ -134,20 +171,36 @@ class GatewayPipeline:
         decision = self._policy.evaluate(principal, call)
 
         # A per-call recorder bound to the constants for this call, so the decision and outcome
-        # entries can never drift on who/what/verdict — only reason + result_summary vary.
+        # entries can never drift on who/what — only verdict, reason + result_summary vary.
         audit = self._call_recorder(
             call_id=call_id,
             principal=principal,
             upstream=upstream,
             tool=tool,
             action=action,
-            verdict=decision.verdict,
             arguments=arguments,
             risk=decision.risk,
         )
 
-        # 4. AUDIT BEFORE ACT (ADR-003) — if this raises, we never forward (fail-closed).
-        audit(reason=decision.reason, result_summary="")
+        # 4. AUDIT BEFORE ACT — if this raises, we never forward (fail-closed).
+        held = decision.verdict is Verdict.ALLOW and self._approval_policy.applies(
+            principal.role, action
+        )
+        if held and self._approvals is None:
+            # Approval is required but there is no queue to hold the call in: fail closed.
+            decision = Decision(
+                call_id=call_id,
+                verdict=Verdict.DENY,
+                reason="write requires human approval but no approval queue is configured",
+            )
+            held = False
+        audit(
+            verdict=Verdict.PENDING if held else decision.verdict,
+            reason=(
+                f"write held for human approval ({decision.reason})" if held else decision.reason
+            ),
+            result_summary="",
+        )
 
         # 4b. Fail-closed authorization: a denied call is recorded (above) and then refused — the
         #     forward below is unreachable on a deny, so an unauthorized call has no side effect.
@@ -170,14 +223,46 @@ class GatewayPipeline:
             )
             raise PolicyDenied(decision.reason)
 
+        # 4c. HOLD: a human decides. Approved -> a chained ALLOW entry naming the approver, then
+        #     the forward. Anything else -> a chained DENY entry, and the forward never runs.
+        if held:
+            assert self._approvals is not None
+            outcome = await self._hold_for_approval(
+                call_id=call_id,
+                principal=principal,
+                upstream=upstream,
+                tool=tool,
+                arguments=arguments,
+            )
+            if outcome.status is ApprovalStatus.APPROVED:
+                audit(
+                    verdict=Verdict.ALLOW,
+                    reason=f"approved by {outcome.decided_by} (request {outcome.id})",
+                    result_summary="",
+                )
+            else:
+                reason = _approval_deny_reason(outcome, self._approval_policy.timeout_s)
+                audit(verdict=Verdict.DENY, reason=reason, result_summary="")
+                self._reporter.report(
+                    "call.denied.approval", call_id=call_id, upstream=upstream, tool=tool
+                )
+                self._metrics.record_call(Verdict.DENY.value, time.perf_counter() - t_start)
+                self._note_deny(call_id=call_id, upstream=upstream, tool=tool, kind="approval")
+                self._log.warning(
+                    "call denied: approval",
+                    extra={"call_id": call_id, "request": outcome.id, "status": outcome.status},
+                )
+                raise ApprovalDenied(reason)
+
         # 5. Forward to the real upstream (never raises; failures come back ok=False).
         #    The forward itself is upstream time, not governance overhead — pause the clock.
         t_pre_forward = time.perf_counter()
         result = await self._upstream.forward(call)
         t_post_forward = time.perf_counter()
 
-        # 6. AUDIT THE OUTCOME — a second chained entry completing the call's lifecycle.
+        # 6. AUDIT THE OUTCOME — a further chained entry completing the call's lifecycle.
         audit(
+            verdict=Verdict.ALLOW,
             reason="forward ok" if result.ok else "forward error",
             result_summary=result.summary,
         )
@@ -203,6 +288,71 @@ class GatewayPipeline:
         return result
 
     # --- internals ---------------------------------------------------------
+    async def _hold_for_approval(
+        self,
+        *,
+        call_id: str,
+        principal: Principal,
+        upstream: str,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> ApprovalRequest:
+        """Queue the request and wait for a final status: decided by a human, expired, or
+        cancelled because the caller went away. Never forwards."""
+        assert self._approvals is not None
+        policy = self._approval_policy
+        preview = json.dumps(arguments, sort_keys=True, default=str)[:ARGUMENTS_PREVIEW_MAX]
+        request = self._approvals.create(
+            ApprovalRequest(
+                id=uuid.uuid4().hex[:8],
+                call_id=call_id,
+                ts=self._clock(),
+                principal=principal.id,
+                role=principal.role,
+                upstream=upstream,
+                tool=tool,
+                arguments_preview=preview,
+            )
+        )
+        self._log.warning(
+            "write held for human approval",
+            extra={
+                "request": request.id,
+                "principal": principal.id,
+                "tool": f"{upstream}:{tool}",
+                "decide_with": f"gatekeeper approve {request.id}  |  gatekeeper deny {request.id}",
+                "timeout_s": policy.timeout_s,
+            },
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + policy.timeout_s
+        try:
+            while True:
+                current = self._approvals.get(request.id)
+                if current is not None and current.is_final:
+                    return current
+                if loop.time() >= deadline:
+                    return self._approvals.decide(
+                        request.id,
+                        ApprovalStatus.EXPIRED,
+                        by="gateway",
+                        note=f"no decision within {policy.timeout_s:g}s",
+                    )
+                await asyncio.sleep(policy.poll_s)
+        except asyncio.CancelledError:
+            # The caller stopped waiting: a late approval must never execute a write nobody is
+            # watching. Best-effort mark; if the request was decided meanwhile, keep that record.
+            try:
+                self._approvals.decide(
+                    request.id,
+                    ApprovalStatus.CANCELLED,
+                    by="gateway",
+                    note="caller disconnected while waiting",
+                )
+            except Exception as exc:  # noqa: BLE001 — already decided or store gone
+                self._log.debug("could not mark request cancelled", extra={"error": str(exc)})
+            raise
+
     def _note_deny(self, *, call_id: str, upstream: str, tool: str, kind: str) -> None:
         """Feed the deny-spike detector; on a NEW breach, fire the alert OFF the hot path.
 
@@ -234,13 +384,12 @@ class GatewayPipeline:
         upstream: str,
         tool: str,
         action: ActionKind,
-        verdict: Verdict,
         arguments: dict[str, Any],
         risk: float | None,
     ) -> Callable[..., LedgerEntry]:
-        """Bind the per-call constants once; the returned recorder only varies reason + summary."""
+        """Bind the per-call constants once; the recorder varies verdict, reason and summary."""
 
-        def record(*, reason: str, result_summary: str) -> LedgerEntry:
+        def record(*, verdict: Verdict, reason: str, result_summary: str) -> LedgerEntry:
             return self._record(
                 call_id=call_id,
                 principal=principal.id,
@@ -293,4 +442,4 @@ class GatewayPipeline:
         return self._ledger.append(entry)
 
 
-__all__ = ["UNAUTHENTICATED_PRINCIPAL", "UNAUTHENTICATED_ROLE", "GatewayPipeline"]
+__all__ = ["UNAUTHENTICATED_PRINCIPAL", "UNAUTHENTICATED_ROLE", "ApprovalPolicy", "GatewayPipeline"]

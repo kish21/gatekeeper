@@ -101,6 +101,10 @@ class Settings(BaseSettings):
         "Lets a hosted deployment carry its own tokens as a platform secret.",
     )
 
+    # --- approval (overrides product.yaml approval.*) ------------------------------------------
+    approval_writes: str = Field(default="", description="require | off")
+    approval_timeout_s: float | None = Field(default=None)
+
     # --- guards ---------------------------------------------------------------------------------
     allow_demo_tokens: bool = Field(
         default=False,
@@ -214,6 +218,12 @@ def _apply_env_overrides(config: dict[str, Any], settings: Settings) -> None:
             *(transport.get("http_allowed_origins") or []),
             *_split_csv(settings.http_allowed_origins),
         ]
+
+    product = config["product"]
+    if settings.approval_writes:
+        product.setdefault("approval", {})["writes"] = settings.approval_writes
+    if settings.approval_timeout_s is not None:
+        product.setdefault("approval", {})["timeout_s"] = settings.approval_timeout_s
 
     if settings.ledger_path:
         platform.setdefault("ledger", {})["path"] = settings.ledger_path
