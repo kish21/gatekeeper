@@ -10,13 +10,18 @@ guide ([docs/deploy/azure-container-apps.md](../deploy/azure-container-apps.md))
 
 - **Multi-stage image** (`python:3.12-slim`): wheel built in a build stage; runtime stage installs
   the wheel + the demo extra, runs as a **non-root** user (`uid 10001`).
-- **Entrypoint = migrate, then serve:** `alembic upgrade head` (fail-loud — a failed migration
-  stops the container) → `exec gatekeeper serve --transport http`.
-- **Container config overlay** ([deploy/container/platform.yaml](../../deploy/container/platform.yaml)):
-  HTTP on `0.0.0.0:8765` **with the explicit ADR-009 ack** (inside a container the bind is
-  namespace-local; real exposure + TLS is the platform ingress's job), ledger at **`/data/audit.db`**
-  (persistent volume), JSON logging. Mount your own dir over `/app/config` (or set
-  `GATEKEEPER_CONFIG_DIR`) for a real deployment.
+- **Entrypoint = serve.** The gateway creates or migrates its ledger on boot (fail-loud — a
+  failed migration stops the container).
+- **Container configuration is plain environment** (`ENV` in the Dockerfile, overridable at run
+  time): HTTP on `0.0.0.0:8765` with the explicit non-loopback acknowledgement (inside a container
+  the bind is namespace-local; real exposure + TLS is the platform ingress's job), ledger at
+  **`/data/audit.db`**. There is no baked config overlay any more, so nothing can drift from
+  `config/platform.yaml`. Mount your own dir over `/app/config` (or set `GATEKEEPER_CONFIG_DIR`)
+  to change servers or policy.
+- **Public hostname trusted automatically:** Azure's `CONTAINER_APP_HOSTNAME` is allow-listed at
+  boot; other platforms set `GATEKEEPER_HTTP_ALLOWED_HOSTS`.
+- **Demo tokens refused on a public bind** unless `GATEKEEPER_ALLOW_DEMO_TOKENS=1` (smoke tests);
+  a deployment carries its own tokens in `GATEKEEPER_IDENTITIES` or uses OIDC.
 - **No secret in the image** (gitleaks-clean): `GATEKEEPER_HMAC_KEY` & co. arrive via the runtime
   environment; the committed identities are the dev demo placeholders, flagged smoke-only.
 - **HEALTHCHECK** = the same `/healthz` the platform probes (stdlib urllib — no curl layer).
@@ -52,9 +57,9 @@ Plus in CI on every push: `container` job = build → boot with a generated key 
 ## Recorded limitations
 
 - **Single replica = a brief restart window on updates** — the ADR-007 trade, stated in the guide.
-- The image bundles the demo upstreams/identities for an out-of-the-box smoke; the guide's step 8
-  ("make it real") swaps them for OIDC + the operator's own config before any real use, and adds
-  the public FQDN to `transport.http_allowed_hosts` (the `/mcp` Host check 421s unknown hosts
-  until then — deliberate fail-closed).
+- The image bundles the demo upstreams for an out-of-the-box smoke. The demo identities are only
+  usable on a public bind with an explicit opt-in; the Azure script issues fresh tokens instead.
+- **The hosted ledger is not durable across a replica restart yet** (Azure Files SMB corrupts
+  SQLite; a durable store is the tracked follow-up — see the deploy guide).
 - ADR-006 (bearer replay) **comes into live view at hosted exposure**: guide mandates OIDC
   short-lived tokens for real use; DPoP/mTLS stays the recorded next step.

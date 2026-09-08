@@ -17,6 +17,8 @@ from gatekeeper.cli import app as cli_app
 from gatekeeper.config.loader import ConfigError
 from gatekeeper.transport.http_server import (
     ensure_exposure_acked,
+    ensure_no_placeholder_tokens,
+    expand_allowed_hosts,
     extract_bearer_token,
     http_transport_config,
 )
@@ -119,3 +121,20 @@ def test_serve_unknown_transport_fails_loud(tmp_path: Any, monkeypatch: Any) -> 
     result = runner.invoke(cli_app.app, ["serve", "--transport", "carrier-pigeon"])
     assert result.exit_code == 2
     assert "unknown transport" in result.stderr
+
+
+# --- hosted hardening: host forms + placeholder tokens --------------------------------------
+def test_expand_allowed_hosts_gives_both_forms_once() -> None:
+    assert expand_allowed_hosts(["gw.example.com"]) == ["gw.example.com", "gw.example.com:*"]
+    assert expand_allowed_hosts(["gw.example.com:*", "gw.example.com"]) == [
+        "gw.example.com",
+        "gw.example.com:*",
+    ]
+
+
+def test_placeholder_tokens_are_refused_on_an_exposed_bind() -> None:
+    demo = [{"token": "dev-token-alice-REPLACE-ME", "principal": "alice", "role": "operator"}]
+    with pytest.raises(ConfigError, match="placeholder"):
+        ensure_no_placeholder_tokens(demo, allow_demo_tokens=False)
+    ensure_no_placeholder_tokens(demo, allow_demo_tokens=True)  # explicit smoke-test opt-in
+    ensure_no_placeholder_tokens([{"token": "a1" * 16}], allow_demo_tokens=False)  # real tokens

@@ -27,7 +27,7 @@ same checks** — just packaged so a whole organisation can rely on it:
 | **Where it runs** | the same machine as the AI assistant | hosted on **your Azure**, reachable by your whole team |
 | **How agents reach it** | a local pipe (stdio) | a secure **web address (HTTPS)** |
 | **Who's calling** | hand-made dev badges (tokens) | **real corporate logins** — Microsoft Entra ID (Azure AD), Okta, Google |
-| **The audit trail** | tamper-proof logbook (a local file) | tamper-proof logbook on a **persistent Azure disk** (survives restarts) |
+| **The audit trail** | tamper-proof logbook (a local file) | the same tamper-proof logbook, **on the container's disk for now** (durable storage is the tracked follow-up, see the deploy guide) |
 | **Health & monitoring** | check it from the command line | a live **`/metrics`** feed for Grafana / Azure Monitor, plus alerts |
 | **Adding a new tool** | edit one settings file | the same — **config + a secret, no code** |
 
@@ -45,7 +45,7 @@ flowchart LR
     subgraph azure["Your Azure subscription"]
         direction TB
         ING["HTTPS front door<br/>(TLS handled by Azure)"] --> GK["GateKeeper<br/>identity → policy → audit → forward"]
-        GK --> LOG[("Tamper-proof audit ledger<br/>persistent disk — survives restarts")]
+        GK --> LOG[("Tamper-proof audit ledger<br/>container disk today; durable store is the follow-up")]
     end
     IDP(["Your company login<br/>Entra ID · Okta · Google"]):::ext -.->|"proves who is calling"| GK
     GK -->|"only allowed calls"| TOOLS(["Your tools / MCP servers<br/>files · GitHub · ServiceNow…"])
@@ -141,12 +141,12 @@ Honesty keeps trust. Here's exactly where things stand:
 | Tamper-proof audit + `verify` | ✅ Built — the core wedge, proven |
 | Govern any tool by config (incl. credentialed) | ✅ Built — proven with a real third-party server |
 | Live `/metrics` + alerts | ✅ Built |
-| **Actually deployed on a live Azure subscription** | ⏳ **Not yet run live** — the deploy is a **copy-paste guide** ([azure-container-apps.md](deploy/azure-container-apps.md)) and the container is proven locally; standing it up on your Azure is a one-time ~15-minute step |
+| **Actually deployed on a live Azure subscription** | ✅ **Run live** (first run 2026-08-24). One command deploys it with fresh per-deployment tokens: [azure-container-apps.md](deploy/azure-container-apps.md). **Caveat:** the hosted ledger is not yet durable across a container restart (see the guide) |
 | Human approval of risky writes | 🔜 Next milestone (M2) |
 
-**The one thing to do before a *live-on-Azure* customer demo:** run the deploy once on your subscription
-(the guide is ready). Until then, the same story demos perfectly on a laptop — the customer sees the identical
-behaviour; only the address is `localhost` instead of an Azure URL.
+**Before a *live-on-Azure* customer demo:** run `bash scripts/deploy_azure.sh` once on your subscription
+(about ten minutes) and use the probe command it prints. The same story also demos perfectly on a laptop —
+the customer sees identical behaviour; only the address differs.
 
 ---
 
@@ -160,4 +160,4 @@ The technical detail behind each beat:
 - **The container image** → [features/container-deploy.md](features/container-deploy.md)
 - **Live metrics & alerts** → [features/observability.md](features/observability.md)
 - **Onboarding a new credentialed tool** → [runbooks/connector-onboarding.md](runbooks/connector-onboarding.md)
-- **The whole why/what/how** → [../PRODUCT.md](../PRODUCT.md)
+- **The whole why/what/how** → [../PRODUCT.md](internal/PRODUCT.md)

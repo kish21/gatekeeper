@@ -36,18 +36,28 @@ class SqliteLedgerStore:
 
     # --- LedgerStore port --------------------------------------------------
     def append(self, entry: LedgerEntry) -> LedgerEntry:
-        """Chain + persist one entry. Raises on failure (so callers can fail-closed)."""
-        prev_hash = self._last_hash()
-        entry_hash = compute_entry_hash(self._key, prev_hash, entry)
-        # Derive columns from the model (mode="json" -> enums as values) so adding a field never
-        # silently drops it here. The chain fields are set by the store, not the caller.
-        row = LedgerEntryRow(
-            **entry.model_dump(mode="json", exclude={"seq", "prev_hash", "entry_hash"}),
-            prev_hash=prev_hash,
-            entry_hash=entry_hash,
-        )
-        self._session.add(row)
-        self._session.commit()
+        """Chain + persist one entry. Raises on failure (so callers can fail-closed).
+
+        The read of the chain head and the insert happen in ONE write transaction (the engine
+        opens it with ``BEGIN IMMEDIATE``), so no other writer can slip in between. A failed
+        commit is rolled back before re-raising: the session stays usable, so one full disk or
+        lock timeout denies *that* call, not every call until restart.
+        """
+        try:
+            prev_hash = self._last_hash()
+            entry_hash = compute_entry_hash(self._key, prev_hash, entry)
+            # Derive columns from the model (mode="json" -> enums as values) so adding a field
+            # never silently drops it here. The chain fields are set by the store, not the caller.
+            row = LedgerEntryRow(
+                **entry.model_dump(mode="json", exclude={"seq", "prev_hash", "entry_hash"}),
+                prev_hash=prev_hash,
+                entry_hash=entry_hash,
+            )
+            self._session.add(row)
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
         self._session.refresh(row)
         return self._to_entry(row)
 
@@ -67,8 +77,18 @@ class SqliteLedgerStore:
         ).scalar_one_or_none()
         return self._to_entry(row) if row is not None else None
 
-    def verify(self) -> VerifyResult:
-        """Walk the chain oldest→newest; recompute each hash + check linkage. Detects any tamper."""
+    def head(self) -> str:
+        """The newest entry's hash (or the genesis hash for an empty ledger)."""
+        return self._last_hash()
+
+    def verify(self, *, expected_head: str | None = None) -> VerifyResult:
+        """Walk the chain oldest→newest; recompute each hash + check linkage.
+
+        Detects any altered, inserted, reordered, or removed record — except records removed from
+        the *end* of the chain, which leave a shorter but valid chain behind. Pass the head hash
+        you pinned earlier (``gatekeeper verify`` prints it) as ``expected_head`` to close that
+        gap: a chain whose head differs from the pinned one is reported as truncated.
+        """
         rows = (
             self._session.execute(select(LedgerEntryRow).order_by(LedgerEntryRow.seq.asc()))
             .scalars()
@@ -82,6 +102,7 @@ class SqliteLedgerStore:
                     ok=False,
                     checked=checked,
                     broken_at=row.seq,
+                    head=expected_prev,
                     detail="prev_hash linkage broken (entry removed, reordered, or inserted)",
                 )
             recomputed = compute_entry_hash(self._key, row.prev_hash, self._to_entry(row))
@@ -90,11 +111,21 @@ class SqliteLedgerStore:
                     ok=False,
                     checked=checked,
                     broken_at=row.seq,
+                    head=expected_prev,
                     detail="entry_hash mismatch (record altered or wrong key)",
                 )
             checked += 1
             expected_prev = row.entry_hash
-        return VerifyResult(ok=True, checked=checked, detail="chain intact")
+        if expected_head is not None and expected_head != expected_prev:
+            return VerifyResult(
+                ok=False,
+                checked=checked,
+                broken_at=None,
+                head=expected_prev,
+                detail="head does not match the pinned head (entries removed from the end, or "
+                "the pin is stale)",
+            )
+        return VerifyResult(ok=True, checked=checked, head=expected_prev, detail="chain intact")
 
     def close(self) -> None:
         self._session.close()

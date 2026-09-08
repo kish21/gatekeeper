@@ -2,7 +2,7 @@
 
 > **What this is:** a non-technical account of 2026-08-24, the day GateKeeper was deployed to a real
 > cloud for the first time. No jargon. If you want the engineering detail, read
-> [the deploy guide](deploy/azure-container-apps.md) and [the test runbook](runbooks/verify-hosted-deploy.md).
+> [the deploy guide](../deploy/azure-container-apps.md) and [the test runbook](verify-hosted-deploy-first-run.md).
 >
 > **The one-line version:** the guard did its job perfectly. The filing cabinet turned out to have no
 > bottom.

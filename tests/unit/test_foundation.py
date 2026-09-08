@@ -43,7 +43,7 @@ def test_health_ok_with_valid_key(monkeypatch):
     monkeypatch.setenv("GATEKEEPER_HMAC_KEY", GOOD_HMAC)
     result = runner.invoke(app, ["health"])
     assert result.exit_code == 0, result.output
-    assert "ledger path" in result.output  # config was read back and shown
+    assert "audit ledger" in result.output  # config was read back and checked
 
 
 def test_health_fails_closed_without_key(monkeypatch):

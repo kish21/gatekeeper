@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
 import shutil
 import sys
@@ -163,15 +162,11 @@ async def run_demo() -> int:
     sandbox = workdir / "sandbox"
     sandbox.mkdir()
     (sandbox / _WELCOME).write_text(_WELCOME_TEXT, encoding="utf-8")
-    # The MCP stdio launcher gives the child a SCRUBBED environment (not the parent's), so the
-    # sandbox root + a quiet child log level must be passed explicitly on the demo-files upstream.
-    # Merge the current environment so the child keeps PATH/SystemRoot (needed to spawn on Windows).
+    # The gateway gives every upstream a minimal spawn environment; the demo server only needs
+    # to know where THIS run's sandbox is (isolated from any prior one).
     for upstream in config["upstreams"]:
         if upstream.get("name") == "demo-files":
-            upstream["env"] = {
-                **os.environ,
-                "DEMO_FILE_ROOT": str(sandbox),  # isolate this run's sandbox from any prior one
-            }
+            upstream["env"] = {"DEMO_FILE_ROOT": str(sandbox)}
 
     ledger_db = str(workdir / "audit.db")
     ensure_parent_dir(ledger_db)

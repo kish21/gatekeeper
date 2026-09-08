@@ -1,7 +1,8 @@
-# identities.yaml — static token -> principal -> role map (M1 IdentityResolver stub).
-# DEV/DEMO ONLY. Tokens here are intentionally FAKE placeholders (allowlisted in .gitleaks.toml).
-# In a real deployment this adapter is swapped for OIDC (config/platform.yaml adapters.identity=oidc),
-# and bearer tokens are upgraded to sender-constrained tokens — see PRODUCT.md ADR-006.
+# identities.yaml — static token -> principal -> role map (the dev/demo identity adapter).
+# DEV/DEMO ONLY. These tokens are public placeholders (allowlisted in .gitleaks.toml). The gateway
+# REFUSES to serve them on a network-reachable interface. For a real deployment either:
+#   * set GATEKEEPER_IDENTITIES="principal:role:token;..." with your own tokens (replaces this file), or
+#   * switch to corporate login: GATEKEEPER_IDENTITY=oidc (see docs/features/oidc-identity.md).
 
 principals:
   - token: dev-token-alice-REPLACE-ME

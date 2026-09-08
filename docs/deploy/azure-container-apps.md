@@ -1,152 +1,117 @@
-# Deploy — Azure Container Apps (M3.3, Azure-first proof)
+# Deploy to Azure Container Apps
 
-> The container is **cloud-neutral** ([Dockerfile](../../Dockerfile)); this guide is the Azure-first
-> proof path. A GCP (Cloud Run) guide is an optional follow-up slice — same image, no code change.
+One command deploys the gateway as a container behind Azure's HTTPS ingress. The container is
+cloud-neutral (see the `Dockerfile`); Azure is the documented path.
 
-## Fastest path: the one-shot script
+## What you need
 
-After `az login`, the whole sequence below is also an **idempotent script** — run it from the repo root:
+- The Azure CLI, signed in (`az login`). On Windows, run the script from Git Bash.
+- This repository checked out. Run the script from its root.
+
+## Deploy
 
 ```bash
-bash scripts/deploy_azure.sh        # ACR build -> env -> Azure Files ledger -> 1-replica deploy -> /healthz
+bash scripts/deploy_azure.sh
 ```
 
-It preflight-checks your login, creates billable resources on your **current** subscription (override
-names via `GK_RG`, `GK_LOCATION`, … env vars), sets the HMAC key **once** (re-runs keep it so the
-ledger stays verifiable), mounts the ledger volume, and waits for `/healthz`. It then prints the live
-URL and the "make it real" follow-ups (allow-list the FQDN + switch to OIDC, step 8 below). The manual
-steps below explain what it does, step by step.
+About ten minutes. It creates a resource group, a container registry (the image is built in
+Azure, no local Docker needed), a Container Apps environment, and one always-on container app
+with public HTTPS ingress. It is safe to re-run: names are deterministic, the image gets a fresh
+tag each time, and the secrets are created once and kept.
 
-## ⚠ BLOCKER — the ledger does NOT persist on Azure Files (SMB)
+What you get, with no further steps:
 
-> **Measured on the first live run, 2026-08-24.** This guide's storage choice is **known-broken** and
-> is kept here only until the replacement lands. Deploy for a governance demo; **do not trust the
-> audit trail** on this path.
+- The public hostname is trusted automatically. Azure injects it into the container and the
+  gateway allow-lists it at boot, so there is no rebuild to add it.
+- Fresh operator and read-only tokens are generated for this deployment and stored as a
+  Container Apps secret. The repository's demo tokens are never on the internet; the gateway
+  refuses to serve them on a public interface.
+- The ledger schema is created on first boot.
 
-What was observed on a real deployment, after governed calls had been served successfully:
+The script ends by printing the exact commands for the next section.
 
-| Evidence | Result |
+## Prove it governs
+
+From your machine, over the public internet:
+
+```bash
+IDS=$(az containerapp secret show -n gatekeeper -g gatekeeper-rg --secret-name identities --query value -o tsv)
+python -m scripts.probe_hosted --url "https://<fqdn>" \
+  --operator-token "$(echo "$IDS" | cut -d';' -f1 | cut -d: -f3)" \
+  --readonly-token "$(echo "$IDS" | cut -d';' -f2 | cut -d: -f3)"
+```
+
+The probe reports one line per check: reachable over HTTPS, an operator read allowed, a read-only
+write denied by policy, an unknown token denied, and `/metrics` live. It keeps "allowed",
+"denied", and "error" distinct, so a broken connection can never score as a passing deny.
+
+Inside the running container:
+
+```bash
+az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper tail --with-id"
+az containerapp exec -n gatekeeper -g gatekeeper-rg --command "gatekeeper verify"
+```
+
+## Switch to your corporate login
+
+No rebuild. Set the OIDC variables on the app and it restarts with per-request token validation
+against your identity provider's public keys:
+
+```bash
+az containerapp update -n gatekeeper -g gatekeeper-rg --set-env-vars \
+  GATEKEEPER_IDENTITY=oidc \
+  GATEKEEPER_OIDC_ISSUER="https://login.microsoftonline.com/<tenant-id>/v2.0" \
+  GATEKEEPER_OIDC_AUDIENCE="<client-id or api://... identifier>" \
+  GATEKEEPER_OIDC_GROUP_ROLE_MAP="<group-object-id>=operator,<group-object-id>=readonly"
+```
+
+Registering the app and the groups in Entra ID is covered in the
+[OIDC feature doc](../features/oidc-identity.md). An unmapped group is denied; there is no
+default role.
+
+## Every knob is an environment variable
+
+| Variable | Meaning |
 |---|---|
-| `ls -la /data` after governed traffic | `audit.db` **0 bytes**, with a stale `audit.db-journal` |
-| `gatekeeper tail` (2nd process, same volume) | `Ledger table not found` — the DB is incoherent between processes |
-| `ls -la /data` after a revision restart | `audit.db` **still 0 bytes**, journal gone — **records lost** |
+| `GATEKEEPER_HMAC_KEY` | Required. The ledger's chain key. Set once; changing it makes old entries unverifiable |
+| `GATEKEEPER_IDENTITIES` | `principal:role:token;...` — this deployment's static tokens |
+| `GATEKEEPER_IDENTITY` | `static_token` or `oidc` |
+| `GATEKEEPER_OIDC_*` | Issuer, audience, group-to-role map, optional JWKS URL and claim names |
+| `GATEKEEPER_HTTP_ALLOWED_HOSTS` | Extra public hostnames, comma-separated. Not needed on Azure |
+| `GATEKEEPER_LEDGER_PATH` | Where the ledger file lives. The image sets `/data/audit.db` |
+| `GATEKEEPER_ALLOW_DEMO_TOKENS` | `1` permits the repository's placeholder tokens on a public bind. Smoke tests only |
 
-**Cause:** SQLite depends on POSIX advisory locking and honest `fsync`. Azure Files **SMB** provides
-neither reliably over the network, so commits are not durable and a second process cannot read a
-consistent database. (Microsoft's own guidance advises against SQLite on Azure Files SMB.) This is a
-*storage* defect, not a gateway defect — the governance path itself measured clean (see the runbook's
-checks 1-7).
+Mount your own `config/` over `/app/config` (or point `GATEKEEPER_CONFIG_DIR` at it) to change the
+governed servers or the policy.
 
-**Consequence for the exit criterion:** M3.3's *"ledger on persistent storage; `verify` clean"* clause
-is **failed, not pending**. Governance over HTTPS is proven; durable audit on this storage is not.
+## What is not durable yet
 
-**Candidate fixes (a design decision, not a patch — pick one deliberately):**
-1. **Azure Files NFS v4.1** (Premium FileStorage) — keeps SQLite + the single-writer ADR-007 model;
-   NFS supports the locking SQLite needs. Smallest change; costs more than Standard SMB.
-2. **A managed disk / block volume** — real block storage, the semantics SQLite assumes.
-3. **Promote the hosted ledger to Postgres** behind the existing `LedgerStore` port — no longer
-   single-writer-by-construction, so the hash-chain's serialization has to move into the DB. Biggest
-   change, and the one that also unblocks multi-replica scale.
+**The hosted audit ledger does not survive a replica restart.** By default the ledger lives on the
+container's own disk. It is correct and tamper-evident while the replica runs, and it is gone when
+Azure replaces the replica.
 
-Tracked as a follow-up; the gateway's SQLite ledger remains correct on local disk (181 tests green).
+Azure Files over SMB was the first attempt at persistence and it does not work for SQLite: on a
+live run the database file stayed at zero bytes while calls were served, a second process could
+not read it, and a restart lost every record. SMB does not provide the locking and honest `fsync`
+SQLite depends on. The script keeps that option behind `GK_LEDGER_STORAGE=files` with a warning,
+for anyone who wants to reproduce the finding.
 
-## Posture (what the ADRs require of ANY deployment)
+The fix is a design decision, tracked as a follow-up:
 
-| Rule | Why | Enforced by |
-|---|---|---|
-| **Exactly 1 replica** (`min-replicas 1 --max-replicas 1`) | ADR-007: the SQLite ledger has ONE writer by construction; a second replica = two hash-chain writers = a correctness bug dressed as scalability. Scale trigger ⇒ the deferred Postgres ledger, not more replicas. | you, below — and the runbook check |
-| **TLS at the ingress, never in-process** | ADR-009 | Container Apps ingress (automatic HTTPS) |
-| **Secrets via environment only** | no secret in image/config (repo rule) | Container Apps secrets → env refs |
-| **Ledger on a persistent volume** | the audit chain must outlive any replica | Azure Files mount at `/data` — **but see the BLOCKER below: SMB does not deliver this** |
-| **Real identity for real exposure** | a hosted gateway is beyond loopback ⇒ the ADR-006 bearer-replay threat is LIVE. The image's default `static_token` demo tokens are for a smoke test only — switch to **OIDC** ([feature doc](../features/oidc-identity.md)) before pointing anything real at it. | you — step 7 |
+1. Azure Files over NFS 4.1 (Premium tier, VNet-integrated environment). Keeps SQLite.
+2. A Postgres ledger behind the existing ledger port. The bigger change, and the one that also
+   allows more than one replica.
 
-```mermaid
-flowchart LR
-    AG(["Local agent /<br/>MCP host"]) -->|"HTTPS · Bearer (OIDC)"| ING
-    subgraph azure["Azure Container Apps"]
-        direction TB
-        ING["Ingress — TLS terminates here<br/>(ADR-009)"] --> APP["gatekeeper container<br/>1 replica = single ledger writer (ADR-007)<br/>:8765 → /mcp + /healthz"]
-        APP --> VOL[("Azure Files /data<br/>tamper-evident ledger — persists across restarts")]
-    end
-    SEC["Secrets via env only<br/>HMAC key · no secret in image"]:::note -.-> APP
-    IDP(["Entra ID / OIDC"]):::note -.->|"validate token (JWKS)"| APP
-    classDef note fill:#fff8e1,stroke:#cc9900
-```
+Until one lands, treat the hosted deployment as proof of governance over the public internet, not
+as a durable audit store.
 
-## Steps (resource names are examples; pick your own)
+## Operations
 
-```bash
-RG=gatekeeper-rg; LOC=westeurope; ACR=gatekeeperacr$RANDOM; APP=gatekeeper
-ENV=gatekeeper-env; SA=gatekeeperled$RANDOM; SHARE=ledger
+- **Updates:** re-run the script. It deactivates the old revision and waits for it to drain
+  before starting the new one, so there is never a second writer on the ledger.
+- **Logs:** `az containerapp logs show -n gatekeeper -g gatekeeper-rg --follow` (structured JSON).
+- **Metrics:** `https://<fqdn>/metrics` in Prometheus text format.
+- **Cost:** one small always-on replica plus a Basic registry, a few euros a month.
+- **Tear down:** `az group delete -n gatekeeper-rg --yes --no-wait`.
 
-# 1. Resource group + registry; build the image IN Azure (no local docker needed)
-az group create -n $RG -l $LOC
-az acr create -n $ACR -g $RG --sku Basic --admin-enabled true
-az acr build -r $ACR -t gatekeeper:latest .
-
-# 2. Container Apps environment
-az extension add -n containerapp --upgrade
-az containerapp env create -n $ENV -g $RG -l $LOC
-
-# 3. Persistent ledger storage (Azure Files -> /data)
-az storage account create -n $SA -g $RG -l $LOC --sku Standard_LRS
-az storage share-rm create -g $RG --storage-account $SA -n $SHARE   # -g required: name, not id
-KEY=$(az storage account keys list -n $SA -g $RG --query '[0].value' -o tsv)
-az containerapp env storage set -n $ENV -g $RG --storage-name ledger \
-  --azure-file-account-name $SA --azure-file-account-key "$KEY" \
-  --azure-file-share-name $SHARE --access-mode ReadWrite
-
-# 4. The app: 1 replica (ADR-007), secret-backed HMAC key, external HTTPS ingress
-az containerapp create -n $APP -g $RG --environment $ENV \
-  --registry-server $ACR.azurecr.io \
-  --image $ACR.azurecr.io/gatekeeper:latest \
-  --target-port 8765 --ingress external \
-  --min-replicas 1 --max-replicas 1 \
-  --secrets hmac-key="$(openssl rand -hex 32)" \
-  --env-vars GATEKEEPER_HMAC_KEY=secretref:hmac-key
-
-# 5. Mount the ledger volume at /data (YAML patch — volumes need the update flow)
-az containerapp show -n $APP -g $RG -o yaml > app.yaml
-#   in app.yaml under template:  add
-#     volumes: [{name: ledger, storageName: ledger, storageType: AzureFile}]
-#   and under the container:     add
-#     volumeMounts: [{volumeName: ledger, mountPath: /data}]
-az containerapp update -n $APP -g $RG --yaml app.yaml && rm app.yaml
-
-# 6. Probes (liveness/readiness = /healthz; same YAML flow if you want them explicit)
-FQDN=$(az containerapp show -n $APP -g $RG --query properties.configuration.ingress.fqdn -o tsv)
-curl -fsS https://$FQDN/healthz        # -> {"status":"ok"}
-```
-
-**7. Validate the governed path from a local agent** (this is the M3.3 exit criterion):
-
-```bash
-# any MCP client / host: Streamable HTTP url = https://$FQDN/mcp
-# Authorization: Bearer dev-token-alice-REPLACE-ME   (image's DEMO identities — smoke only!)
-#   -> list tools (demo-files + time), call read_file welcome.txt -> governed + recorded
-az containerapp exec -n $APP -g $RG --command "gatekeeper tail"
-az containerapp exec -n $APP -g $RG --command "gatekeeper verify"   # OK ledger intact
-```
-
-**8. Make it real (before any non-demo use):** mount your own config dir (or bake an image) with:
-- `transport.http_allowed_hosts: ["$FQDN", "$FQDN:*"]` — **list it BOTH ways.** The SDK's `:*`
-  pattern only matches a Host header that carries a port (`host.startswith(base + ":")`), and a
-  request to the HTTPS ingress on :443 sends the host with **no port**, so a `:*`-only entry 421s
-  every real request (found on the first live run, 2026-08-24). The `/mcp` DNS-rebinding check refuses unknown
-  Host headers with 421 until the public FQDN is allowlisted (deliberate: fail-closed).
-- `adapters.identity: oidc` + your Entra tenant per the [OIDC feature doc](../features/oidc-identity.md);
-  replace/remove `identities.yaml`. Bearer JWTs remain replayable within their lifetime — keep them
-  short-lived; DPoP/mTLS-bound tokens (ADR-006) are the recorded next step if exposure widens.
-
-## Operational notes
-
-- **Updates:** `az acr build … && az containerapp update -n $APP -g $RG --image …` — single
-  replica means a brief restart window (accepted: ADR-007 trade; the entrypoint re-runs
-  `alembic upgrade head` idempotently).
-- **Logs:** structured JSON on stderr → `az containerapp logs show -n $APP -g $RG --follow`
-  (SIEM-ready; the ledger remains the authoritative audit record).
-- **Cost floor:** 1 always-on small replica (0.25 vCPU / 0.5 Gi) + Standard_LRS file share —
-  a few €/month, the cheapest correct shape (consumption-scale-to-zero would cold-start the
-  governance hot path and is off by `min-replicas 1`).
-- **CI parity:** every push builds this Dockerfile and smoke-checks `/healthz` in the `container`
-  CI job, so the image cannot rot between deploys.
+Override any resource name with `GK_RG`, `GK_APP`, `GK_LOCATION`, `GK_ENV`, `GK_ACR`, `GK_SUFFIX`.

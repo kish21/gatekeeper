@@ -31,7 +31,12 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from gatekeeper.config.loader import ConfigError, get_settings, load_config
+from gatekeeper.config.loader import (
+    ConfigError,
+    get_settings,
+    has_placeholder_tokens,
+    load_config,
+)
 from gatekeeper.gateway.factory import GatewayRuntime, build_runtime
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.infra.metrics import GatewayMetrics, default_metrics
@@ -67,6 +72,22 @@ def http_transport_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def expand_allowed_hosts(hosts: list[str]) -> list[str]:
+    """Allow each configured host both bare and with any port.
+
+    The SDK's DNS-rebinding check matches ``host:*`` only against a Host header that carries a
+    port, and a request through an HTTPS ingress on :443 sends the host with no port at all. An
+    operator should not have to know that: listing ``gw.example.com`` once must work for both.
+    """
+    expanded: list[str] = []
+    for host in hosts:
+        bare = host[:-2] if host.endswith(":*") else host
+        for form in (bare, f"{bare}:*"):
+            if form not in expanded:
+                expanded.append(form)
+    return expanded
+
+
 def _is_loopback(host: str) -> bool:
     """True only for addresses that cannot be reached off-box. Unknown hostnames count as NOT
     loopback (fail-closed): we refuse rather than resolve-and-guess."""
@@ -95,6 +116,25 @@ def ensure_exposure_acked(host: str, *, allow_non_loopback: bool) -> None:
             "transport.http_allow_non_loopback: true in platform.yaml — and terminate TLS "
             "in front of the gateway (see the M3.3 deploy guide)."
         )
+
+
+def ensure_no_placeholder_tokens(
+    identities: list[dict[str, Any]], *, allow_demo_tokens: bool
+) -> None:
+    """Refuse to expose the committed ``*-REPLACE-ME`` demo tokens beyond the local machine.
+
+    They ship in the public repository, so on a network-reachable bind they are not credentials —
+    they are an open door. ``GATEKEEPER_ALLOW_DEMO_TOKENS=1`` opts a throwaway smoke deployment in.
+    """
+    if allow_demo_tokens or not has_placeholder_tokens(identities):
+        return
+    raise ConfigError(
+        "Refusing to serve on a network-reachable interface with the placeholder demo tokens "
+        "from config/identities.yaml loaded (they are public: anyone who has read the repository "
+        "could act as an operator). Replace them with your own tokens, switch to "
+        "GATEKEEPER_IDENTITY=oidc, or — for a throwaway smoke test only — set "
+        "GATEKEEPER_ALLOW_DEMO_TOKENS=1."
+    )
 
 
 def extract_bearer_token() -> str:
@@ -209,15 +249,18 @@ async def serve_http() -> None:
                 "sender-constrained tokens when available.",
                 extra={"host": cfg["host"], "port": cfg["port"]},
             )
-            # Exposed + the DEV static-token map = the committed demo tokens would grant access
-            # off-box (security-review finding). Not a hard refuse (an operator may run their own
-            # static map behind a trusted ingress), but it must be a loud, recorded signal —
-            # the deploy guide's "switch to OIDC before real use" step exists for exactly this.
+            # Exposed + the DEV static-token map: an operator may run their OWN static map behind
+            # a trusted ingress (loud signal), but the COMMITTED placeholder tokens are public
+            # knowledge — anyone who has read the repository could act as an operator. That is
+            # refused outright unless a smoke test opts in explicitly.
             if config["platform"].get("adapters", {}).get("identity") == "static_token":
+                ensure_no_placeholder_tokens(
+                    config["identities"], allow_demo_tokens=get_settings().allow_demo_tokens
+                )
                 log.warning(
                     "exposed bind is using the static_token identity adapter: any caller who "
                     "knows a token in config/identities.yaml gets that role. Switch to "
-                    "adapters.identity: oidc for real use (docs/features/oidc-identity.md).",
+                    "GATEKEEPER_IDENTITY=oidc for real use (docs/features/oidc-identity.md).",
                     extra={"host": cfg["host"]},
                 )
 
@@ -237,7 +280,9 @@ async def serve_http() -> None:
             path=cfg["path"],
             # On an acked non-loopback bind, the configured bind host is also a valid Host
             # header; a hosted deployment adds its public FQDN via http_allowed_hosts.
-            allowed_hosts=cfg["allowed_hosts"] + ([f"{cfg['host']}:*"] if non_loopback else []),
+            allowed_hosts=expand_allowed_hosts(
+                cfg["allowed_hosts"] + ([cfg["host"]] if non_loopback else [])
+            ),
             allowed_origins=cfg["allowed_origins"],
             overhead_budget_ms=float(
                 config["platform"].get("perf", {}).get("overhead_p95_ms", _DEFAULT_BUDGET_MS)

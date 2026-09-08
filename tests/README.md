@@ -1,6 +1,6 @@
 # Tests
 
-Four tiers (see `PRODUCT.md` → Tests, written in the /test phase):
+Four tiers (see `docs/internal/PRODUCT.md` → Tests, written in the /test phase):
 
 - **`unit/`** — isolated logic with ports mocked: hash-chain math, write-detection, policy mapping,
   decision value objects. Fast, no I/O.

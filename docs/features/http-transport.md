@@ -1,7 +1,7 @@
 # Feature — HTTP transport (M3.1)
 
 > Build #6 · 2026-06-12 · finishes the M1 in-scope item *"Transparent MCP proxy (stdio + **HTTP**
-> transport)"*. Architecture decisions: `PRODUCT.md#Architecture` → *M3.1 addendum* (ADR-007/008/009).
+> transport)"*. Architecture decisions: `../internal/PRODUCT.md#Architecture` → *M3.1 addendum* (ADR-007/008/009).
 
 ## What it is
 
@@ -84,7 +84,7 @@ surface (`test_http_rejects_unknown_host_header`).
   **p50 ≈ +5 ms (stable), p95 +5.6…+11 ms** on a Windows dev box — **met at the median, over the
   aspirational < ~5 ms p95**. Gated by `perf.http_transport_overhead_p95_ms` (config). Re-measure on
   the Linux/SSD CI target before treating as canonical. The governed-call p95 delta is noise-dominated
-  (carried fsync baseline) and is reported as context only, not gated. See `PRODUCT.md#Evaluation` →
+  (carried fsync baseline) and is reported as context only, not gated. See `../internal/PRODUCT.md#Evaluation` →
   M3 addendum.
 - `initialize` itself is unauthenticated (protocol handshake, reveals only server name/version);
   the governed surface (`tools/list`, `tools/call`) is where fail-closed auth applies.

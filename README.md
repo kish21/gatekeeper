@@ -1,170 +1,138 @@
 # GateKeeperAI
 
-**A tool-agnostic, *verifiable* governance gateway for the Model Context Protocol (MCP).**
+**A security guard between your AI agent and the tools it uses.** Every tool call is checked for
+who is asking, checked against a rulebook, written to a tamper-evident audit trail, and only then
+let through. It works with any server that speaks the Model Context Protocol (MCP), and you add a
+server by editing a settings file, not by writing code.
 
-GateKeeperAI sits between an AI agent and the MCP servers it calls. Every tool call is
-**authenticated**, **RBAC-checked**, **approved-on-write**, and recorded in a **tamper-evident,
-hash-chained audit ledger** — for *any* MCP server you plug in by config.
+## Why you would want this
 
-> Most MCP gateways treat governance as routing ("forward the call, check a token, log it").
-> GateKeeperAI's wedge is **verifiable governance**: *provable policy* (Cedar, analyzable) +
-> *provable audit* (keyed-HMAC hash-chain). **Don't trust the gateway — verify it.**
+When an AI assistant can read files, open tickets, or change records, three questions come up fast:
 
----
-
-## Why
-
-The MCP standard says nothing about authn, authz, write-safety, or audit. As agents move from demos to
-production — performing real **writes** on real systems — that gap is the blocker. GateKeeperAI closes it
-with one config-driven control plane, so a platform/security engineer can adopt agents without losing
-control or failing an audit.
-
-## How it works
-
-```mermaid
-flowchart LR
-    A(["AI agent"]) -->|"MCP call + bearer token"| ID
-    subgraph GK["GateKeeperAI — one governed pipeline (fail-closed)"]
-        direction TB
-        ID["1 · Identity<br/>token → principal + role"] --> POL{"2 · Policy · Cedar<br/>allow or deny?"}
-        POL -->|"allow"| AUD["3 · Audit decision<br/>before forward (ADR-003)"]
-        POL -->|"deny + reason"| DENY["3 · Audit the deny"]
-        AUD --> FWD["4 · Forward"]
-        FWD --> OUT["5 · Audit outcome"]
-        M2["M2 roadmap: LLM risk-score<br/>→ human approval (writes only)"]:::soon -.-> AUD
-    end
-    FWD -->|"MCP"| UP(["Any upstream MCP server"])
-    UP -->|"untouched result"| A
-    DENY -->|"blocked: reason"| A
-    AUD -.-> LED[("Tamper-evident<br/>hash-chained ledger")]
-    DENY -.-> LED
-    OUT -.-> LED
-    classDef soon fill:#fff8e1,stroke:#cc9900,stroke-dasharray: 5 5
-```
-
-- **Authenticated** — every call resolves to a principal + role (`IdentityResolver`).
-- **Authorized** — allow/deny per role × tool as **policy-as-code** (Cedar `.cedar` files).
-- **Approved-on-write (M2)** — an LLM risk-scores calls; risky/write calls wait for a human.
-- **Provably logged** — append-only, keyed-HMAC hash-chained ledger; `gatekeeper verify` proves
-  no record was altered, inserted, or removed.
-- **Tool-agnostic** — govern any MCP server by editing `config/upstreams.yaml`. Zero code per server.
-
-### Architecture at a glance
-
-Ports-&-adapters (hexagonal): the pipeline is the policy-enforcement core; every external is an
-interface with a config-selected adapter, and dependencies point **inward**. (Full ADRs in
-[`PRODUCT.md`](PRODUCT.md#architecture).)
-
-```mermaid
-flowchart TB
-    AGENT(["AI agent"]) -->|"MCP · stdio / HTTP"| T["Transport<br/>(no business logic)"]
-    T --> PIPE
-    subgraph core["Gateway pipeline — the PEP"]
-        PIPE["identity → policy → (M2: risk → approval) → audit → forward"]
-    end
-    PIPE --> IR["IdentityResolver"]
-    PIPE --> PE["PolicyEngine"]
-    PIPE --> LS["LedgerStore"]
-    PIPE --> UC["UpstreamClient"]
-    IR -.-> IRA["static token · OIDC"]
-    PE -.-> PEA["Cedar policy-as-code"]
-    LS -.-> LSA["SQLite + keyed-HMAC chain"]
-    UC -.-> UCA["MCP client → real servers"]
-    classDef port fill:#eef2ff,stroke:#6677aa
-    class IR,PE,LS,UC port
-```
-
-## See it in 30 seconds
-
-To **watch** governance happen — without wiring up an agent — run the narrated demo. It plays the
-whole story on your terminal against the real pipeline and a real upstream subprocess (hermetic:
-an ephemeral key + a throwaway ledger in a temp dir, removed on exit — nothing to set up, nothing
-touched):
-
-```bash
-make demo            # or: python -m scripts.demo
-```
-
-You'll see an operator's read **allowed**, a read-only user's write **denied by Cedar policy**, a
-real third-party server (`mcp-server-time`) governed with zero code, the hash-chained audit ledger
-**verify clean**, and then a deliberate tamper **caught** — the wedge: *don't trust the gateway,
-verify it.*
-
-## Quickstart
-
-GateKeeperAI is a **stdio MCP server your agent connects to**. The repo ships with a working demo
-target (`config/upstreams.yaml` → a local `demo_file_server`), so you can try governance end-to-end
-with no extra setup.
-
-```bash
-make install        # deps + git hooks
-cp .env.example .env # then set two values in .env (see below)
-make migrate        # create the tamper-evident audit ledger
-make serve          # run the gateway as a stdio MCP server (waits for a client to connect)
-```
-
-Set these in `.env` (neither is an external API key):
-
-| Variable | Value | What it's for |
+| Question | Without GateKeeper | With GateKeeper |
 |---|---|---|
-| `GATEKEEPER_HMAC_KEY` | output of `openssl rand -hex 32` | local key for the ledger hash-chain (required to boot) |
-| `GATEKEEPER_AGENT_TOKEN` | `dev-token-alice-REPLACE-ME` (a dev token from `config/identities.yaml`) | identifies the connecting agent; unknown/unset → refused |
+| Who is the AI acting as? | A shared password nobody can trace | Every call carries an identity and a role, recorded on every line |
+| What is it allowed to do? | Whatever it can be talked into | A readable rulebook; read-only roles cannot write, full stop |
+| What did it actually do? | A log file anyone could edit | A hash-chained ledger you can *prove* was never altered |
 
-Point your MCP client/agent at the `gatekeeper serve` command (the same way you'd register any stdio
-MCP server). It sees the upstream's tools, and **every call is authenticated, decided, and recorded
-before being forwarded**. Then, in any shell:
+The last row is the point. You do not have to trust the gateway. You can check it.
 
-```bash
-gatekeeper seed-demo               # prepare the demo sandbox + print a ready-to-run recipe
-make tail                          # view the audit trail
-make verify                        # prove the ledger is intact (exit 0 = untampered)
-gatekeeper show <call_id>          # inspect the recorded decision for one call
-```
-
-### Govern any server by config (zero code)
-
-The repo ships a **second, real upstream** to prove the tool-agnostic promise: `config/upstreams.yaml`
-registers the third-party `mcp-server-time` server (which GateKeeperAI did **not** write). Install it
-and it's governed exactly like the demo files — no gateway code:
+## See it in one command
 
 ```bash
-pip install -e ".[demo]"           # adds the real third-party MCP server (mcp-server-time)
+make install && make demo
 ```
 
-To govern *your own* MCP server, add a block to `config/upstreams.yaml` (name, transport, command) —
-that's the entire integration. One unavailable upstream is logged and skipped, never fatal.
+Nothing to configure. It uses a throwaway ledger in a temp folder and cleans up after itself.
+This is the real thing, cut down to the lines that matter:
 
-**Servers that need a credential** (e.g. a GitHub server's token) reference it by **name**, so the
-secret value stays in `.env` and never lands in YAML — fail-closed if it's unset:
+```text
+Beat 1/5 - Transparent
+  ALLOW  alice (operator)   demo-files:read_file
+           relayed from the real server -> "Hello from GateKeeperAI ..."
+
+Beat 2/5 - RBAC bites
+  DENY   bob (read-only)    demo-files:write_file
+           policy: denied by cedar policy: role 'readonly' may not write demo-files::write_file
+           sandbox now contains -> welcome.txt  (secret.txt was never created - deny had no effect)
+
+Beat 3/5 - Tool-agnostic
+  ALLOW  alice (operator)   time:get_current_time
+           relayed from a server we did NOT write -> {"timezone": "UTC", "datetime": ...}
+
+Beat 4/5 - Provable audit
+| seq | principal | role     | tool                  | action | verdict |
+| 1   | alice     | operator | demo-files:read_file  | read   | allow   |
+| 3   | bob       | readonly | demo-files:write_file | write  | deny    |
+| 6   | alice     | operator | time:get_current_time | read   | allow   |
+  verify -> OK  chain intact, 7 entries verified
+
+Beat 5/5 - Don't trust - verify
+  tampering with seq=3: rewriting its 'reason' to look benign...
+  verify -> TAMPERED  broken at seq=3: entry_hash mismatch (record altered or wrong key)
+```
+
+## Use it for real
+
+Three commands take a fresh checkout to a gateway your MCP host can launch:
+
+```bash
+gatekeeper init      # generates the secrets into .env, creates the ledger, seeds the demo files
+gatekeeper doctor    # checks everything, then prints the block to paste into your MCP host
+```
+
+`doctor` prints something like this. Paste it into Claude Desktop's `claude_desktop_config.json`
+(or any host's `mcpServers` block). The paths are absolute, so it works from anywhere:
+
+```json
+{
+  "mcpServers": {
+    "gatekeeper": {
+      "command": "/home/you/gatekeeper/.venv/bin/gatekeeper",
+      "args": ["serve"],
+      "env": { "GATEKEEPER_CONFIG_DIR": "/home/you/gatekeeper/config" }
+    }
+  }
+}
+```
+
+From then on the host launches the gateway, the gateway launches the governed servers, and every
+call goes through the guard. Look at what happened whenever you like:
+
+```bash
+gatekeeper tail --with-id     # the audit trail
+gatekeeper show <call_id>     # one recorded decision, with its reason
+gatekeeper verify             # exit 0 = untampered; prints a head hash you can pin
+```
+
+Full walkthrough, including what each file means: [Getting started](docs/getting-started.md).
+
+## Govern your own server
+
+Add a block to `config/upstreams.yaml`. That is the whole integration:
 
 ```yaml
   - name: github
     transport: stdio
     command: ["npx", "-y", "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # value read from .env at launch, not stored here
+      GITHUB_TOKEN: { from_env: GITHUB_TOKEN }   # the value stays in .env, never here
     reads:  ["search_repositories", "get_file_contents", "list_issues"]
     writes: ["create_issue", "merge_pull_request", "delete_branch"]
 ```
 
-> **Not an external service:** `serve` runs entirely local (gateway → local upstreams). No network
-> call leaves your machine and no LLM/API key is involved in M1 — that arrives with M2 risk-scoring.
+The existing rulebook already applies: a read-only role calling `create_issue` is denied, an
+operator is allowed, and both are recorded. Governed servers receive only the environment they
+need to start plus what you declare for them, never the gateway's own secrets.
 
-## Status
+## Run it for a whole team
 
-Early build — see [`PRODUCT.md`](PRODUCT.md) for the full vision, scope, plan, and architecture
-(ADRs included), and [`STRUCTURE.md`](STRUCTURE.md) for the codebase map.
+The same gateway runs as a container over HTTPS, with your corporate login (OIDC: Entra ID, Okta,
+Google) deciding each caller's role. Everything a hosted deployment differs on is an environment
+variable, so you never rebuild the image to change a hostname or switch identity providers.
 
-**Plain-English guides (no code):** [The use case, as a story](docs/USE-CASE-STORY.md) (start here if GateKeeper is new to you) ·
-[How it works](docs/HOW-IT-WORKS.md) (the local "guard" story) ·
-[GateKeeper on Azure](docs/SHOWCASE-AZURE.md) (the hosted/enterprise story + a "what to show a customer" demo script).
+```bash
+az login && bash scripts/deploy_azure.sh     # Azure Container Apps, one command, safe to re-run
+```
 
-| Milestone | Scope | State |
-|---|---|---|
-| **M1** | governed verifiable proxy (identity · RBAC · hash-chain ledger · `verify` · config-driven) | ✅ **complete** — M1.1–M1.4 shipped, `/dev-check` passed, evaluated (coverage 100% / 0 bypass) |
-| **M3** | enterprise deployment readiness (HTTP transport · OIDC identity · container + Azure · observability · connector runbook) | ✅ **built + evaluated** — pulled in on fired enterprise-requirements triggers. 3 live-cloud proofs (real Entra token · Azure run · credentialed connector) are operator actions; copy-paste guides shipped |
-| **M2** | LLM risk-scoring + human write-approval | planned — deliberately time-boxed (~2026-08-08) |
+See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is and is not durable yet.
 
-## License
+## What works today
 
-Apache-2.0. See [`LICENSE`](LICENSE). Security policy: [`SECURITY.md`](SECURITY.md).
+| Capability | Status |
+|---|---|
+| Every call authenticated, policy-checked, recorded before it is forwarded | Works today |
+| Tamper-evident ledger; `verify` pinpoints any altered, inserted, or removed record | Works today |
+| Any MCP server governed by config alone, credentials referenced by name | Works today |
+| HTTP transport, OIDC login, container image, `/metrics`, deny-spike alerts | Works today |
+| One-command Azure deploy with fresh per-deployment tokens | Works today; the hosted ledger is not yet durable across restarts |
+| AI risk-scoring of writes and human approval before they run | Next milestone, not built |
+
+## Learn more
+
+- [The use case, as a story](docs/USE-CASE-STORY.md) if GateKeeper is new to you
+- [How it works](docs/HOW-IT-WORKS.md) in plain English, and [GateKeeper on Azure](docs/SHOWCASE-AZURE.md)
+- [Glossary](docs/glossary.md), [feature docs](docs/features/), [codebase map](STRUCTURE.md)
+- Design history and decision records: [docs/internal/PRODUCT.md](docs/internal/PRODUCT.md)
+
+Apache-2.0. See [`LICENSE`](LICENSE) and [`SECURITY.md`](SECURITY.md).

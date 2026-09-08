@@ -16,4 +16,4 @@ make check     # lint + tests (must pass before a PR)
 - **Tests required.** Unit (isolated) + integration (real contracts) + adversarial (tamper/bypass).
 
 ## Workflow
-One feature per branch → PR → CI green → review → squash-merge. See `PRODUCT.md` for the phase plan.
+One feature per branch → PR → CI green → review → squash-merge. See `docs/internal/PRODUCT.md` for the phase plan.

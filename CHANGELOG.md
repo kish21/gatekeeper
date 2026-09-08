@@ -5,6 +5,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+### Changed — make it easy to run, and honest about what is hosted
+- **Two-command first run.** `gatekeeper init` generates the HMAC key and agent token into `.env`,
+  creates the ledger (migrations run on boot now; `make migrate` is no longer a required step), and
+  seeds the demo files. `gatekeeper doctor` checks key, ledger, policy, token and every server's
+  launcher, then prints the `mcpServers` block to paste into an MCP host, with absolute paths.
+- **Paths resolve against the project root**, not the working directory, so a host launching the
+  gateway from anywhere finds `.env`, the ledger and the policies via `GATEKEEPER_CONFIG_DIR`.
+- **Every runtime knob is an environment variable** (`GATEKEEPER_TRANSPORT`, `_HTTP_*`,
+  `_LEDGER_PATH`, `_IDENTITY`, `_OIDC_*`, `_IDENTITIES`). The container has no baked config overlay
+  any more; `deploy/container/platform.yaml` is gone.
+- **Azure deploy needs no second build.** The platform's `CONTAINER_APP_HOSTNAME` is trusted
+  automatically; each configured host is accepted with and without a port. The script issues fresh
+  per-deployment tokens as a platform secret and prints the probe command; OIDC is a `--set-env-vars`
+  away. Storage defaults to the container disk with the SMB finding stated up front
+  (`GK_LEDGER_STORAGE=files` keeps the old path).
+- **Docs restructured for readers, not the build process.** README leads with the three questions
+  and a real demo transcript; new `docs/getting-started.md`, `docs/glossary.md`, a single deploy
+  guide. `PRODUCT.md`, the first-run explainer and its runbook moved to `docs/internal/`. Windows
+  launchers moved to `scripts/windows/`. Unread config knobs and the empty next-milestone packages
+  were removed.
+
+### Fixed
+- **Ledger:** a failed append is rolled back, so one disk-full or lock timeout denies that call
+  instead of every call until restart. The engine now uses WAL, a busy timeout, and
+  `BEGIN IMMEDIATE`, so two processes can never both read the same chain head and fork the chain
+  (test added). `verify` reports the head hash and accepts `--expect-head` to detect records removed
+  from the end of the chain.
+- **Upstream launch environment:** governed servers receive a minimal spawn environment plus their
+  declared variables, instead of the gateway's entire environment (API keys and cloud credentials
+  no longer leak to every server). A session that fails mid-call is dropped and relaunched on the
+  next call instead of timing out forever. Error text written to the ledger is capped.
+- **Public bind with the repository's demo tokens is refused** (`GATEKEEPER_ALLOW_DEMO_TOKENS=1`
+  opts a smoke test in).
+- **OIDC:** the issuer is compared verbatim (trailing-slash IdPs such as Auth0/Keycloak work);
+  default clock-skew leeway is 30 s instead of 0.
+- **Dependency pin:** `mcp>=1.27.2,<2`. The 2.x SDK renamed the client API and broke a fresh
+  install.
+
 ### Fixed
 - **First live Azure run (2026-08-24) — five defects in the deploy path**, none reachable by review:
   - `az acr build` log streaming crashed the CLI on a Windows cp1252 console

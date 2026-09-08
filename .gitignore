@@ -52,3 +52,6 @@ coverage.xml
 *.swp
 .DS_Store
 Thumbs.db
+
+# uv lockfile: CI and the Makefile fall back to pip resolution; not tracked yet
+uv.lock

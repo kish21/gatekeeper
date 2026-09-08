@@ -15,7 +15,7 @@ from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
-from gatekeeper.config.loader import ConfigError, boot, get_settings, secret_source
+from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir, secret_source
 from gatekeeper.domain.classify import ActionClassifier
 from gatekeeper.gateway.pipeline import GatewayPipeline
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
@@ -23,7 +23,6 @@ from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
 
 _DEFAULT_UPSTREAM_TIMEOUT = 30.0
-_DEFAULT_POLICY_DIR = "./policies"
 
 
 @dataclass
@@ -55,8 +54,7 @@ def _build_policy(platform: dict[str, Any]) -> PolicyEngine:
     kind = platform.get("adapters", {}).get("policy", "cedar")
     if kind != "cedar":
         raise ConfigError(f"policy adapter {kind!r} not supported yet (cedar only).")
-    policy_dir = platform.get("policy", {}).get("dir", _DEFAULT_POLICY_DIR)
-    return CedarPolicyEngine.from_config(policy_dir)  # fail-loud on a missing/unparseable policy
+    return CedarPolicyEngine.from_config(policy_dir({"platform": platform}))  # fail-loud
 
 
 def _build_classifier(product: dict[str, Any], upstreams: list[dict[str, Any]]) -> ActionClassifier:

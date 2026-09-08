@@ -1,69 +1,59 @@
-# platform.yaml — ENGINE / technical knobs (change how the gateway runs).
-# Business/product knobs live in product.yaml. Secrets live in .env (never here).
+# platform.yaml — how the gateway RUNS (transport, identity, storage, alerting).
+#
+# Every value here can also be set from the environment, which is how a hosted deployment is
+# configured without touching this file. The variable name is shown next to each knob.
+# Secrets never live here: GATEKEEPER_HMAC_KEY, GATEKEEPER_AGENT_TOKEN and any upstream
+# credentials come from .env or the deployment environment.
+#
+# Relative paths resolve against the project root (the parent of this config/ folder), so the
+# gateway works no matter which directory an MCP host launches it from.
 
 transport:
-  mode: stdio            # stdio | http  (gatekeeper serve --transport overrides per invocation)
-  http_host: 127.0.0.1   # trust-local default (see ADR-006: bearer tokens, loopback only)
-  http_port: 8765
-  http_path: /mcp        # where the MCP Streamable HTTP surface is mounted
-  http_allow_non_loopback: false   # ADR-009: a non-loopback bind REFUSES boot unless acked here
-  http_allowed_origins: []         # ADR-009: Origin allowlist (empty = cross-site requests refused)
-  http_allowed_hosts: []           # extra Host values for /mcp (hosted FQDN, e.g. "gw.example.com:*")
+  mode: stdio                      # GATEKEEPER_TRANSPORT            stdio | http
+  http_host: 127.0.0.1             # GATEKEEPER_HTTP_HOST            loopback unless acked below
+  http_port: 8765                  # GATEKEEPER_HTTP_PORT
+  http_path: /mcp                  # GATEKEEPER_HTTP_PATH
+  http_allow_non_loopback: false   # GATEKEEPER_HTTP_ALLOW_NON_LOOPBACK  required to bind 0.0.0.0
+  http_allowed_origins: []         # GATEKEEPER_HTTP_ALLOWED_ORIGINS (comma-separated)
+  # Public hostnames the HTTP transport accepts (a hosted FQDN). List each host once; the
+  # gateway accepts it with and without a port. Azure Container Apps' CONTAINER_APP_HOSTNAME is
+  # trusted automatically, so a hosted deploy needs no entry here.
+  http_allowed_hosts: []           # GATEKEEPER_HTTP_ALLOWED_HOSTS (comma-separated)
 
-# Which concrete adapter implements each port (ports & adapters / ADR-004).
-# Swap an implementation here without touching business logic.
 adapters:
-  identity: static_token   # static_token (dev default) | oidc (M3.2 — see identity.oidc below)
-  policy: cedar            # cedar
-  ledger: sqlite           # sqlite (M1) | postgres (deferred)
-  upstream: mcp_client     # mcp_client
-  llm: claude              # claude | openai | stub  (M2 only)
+  identity: static_token           # GATEKEEPER_IDENTITY             static_token | oidc
+  policy: cedar
 
-# M3.2 — OIDC identity (used ONLY when adapters.identity: oidc). Generic across IdPs; the
-# commented values show the Entra ID shape. No secret here: tokens arrive per request and are
-# validated against the IdP's PUBLIC JWKS keys.
+# OIDC identity — used only when adapters.identity is oidc. Every field can come from the
+# environment (GATEKEEPER_OIDC_ISSUER, _AUDIENCE, _GROUP_ROLE_MAP="group-id=role,...",
+# _JWKS_URL, _PRINCIPAL_CLAIM, _GROUPS_CLAIM). Tokens are validated against the IdP's public
+# JWKS keys; no secret is needed. See docs/features/oidc-identity.md.
 # identity:
 #   oidc:
 #     issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
-#     audience: <the gateway app's client-id or api://… identifier URI>
-#     group_role_map:                 # IdP group (Entra: group OBJECT id) -> gateway role;
-#       <group-object-id>: operator   #   map order ranks roles, first match wins;
-#       <group-object-id>: readonly   #   unmapped groups -> DENY (fail-closed)
-#     jwks_url: …                     # optional; default = OIDC discovery on the issuer
-#     principal_claim: sub            # Entra alternatives: oid, preferred_username
+#     audience: <the gateway app's client-id or api://... identifier>
+#     group_role_map:              # IdP group -> gateway role; first match wins;
+#       <group-object-id>: operator  #   unmapped groups are denied
+#       <group-object-id>: readonly
+#     principal_claim: sub         # Entra alternatives: oid, preferred_username
 #     groups_claim: groups
-#     algorithms: [RS256]             # asymmetric only; HS*/none are never accepted
-#     leeway_s: 0
-#     jwks_lifespan_s: 900
+#     leeway_s: 30                 # clock-skew tolerance
 
 ledger:
-  path: ./.gatekeeper/audit.db
-  hash_algo: hmac-sha256   # keyed HMAC; key = $GATEKEEPER_HMAC_KEY (ADR-003)
+  path: ./.gatekeeper/audit.db     # GATEKEEPER_LEDGER_PATH
+  hash_algo: hmac-sha256           # the chain's keyed hash (key = GATEKEEPER_HMAC_KEY)
 
 policy:
-  dir: ./policies          # .cedar files (policy-as-code)
+  dir: ./policies                  # GATEKEEPER_POLICY_DIR           directory of .cedar files
 
-# Per-external resilience (ADR-004). Times in seconds.
 resilience:
-  upstream: { timeout: 30, retries: 2, retry_on: transient, breaker_threshold: 5 }
-  llm:      { timeout: 8,  retries: 1, retry_on: transient }   # M2
+  upstream: { timeout: 30 }        # seconds a forwarded call may take before it fails closed
 
-logging:
-  level: INFO
-  format: json             # structured logs for SIEM ingestion
-
-# M3.4 — operator observability. The /metrics route (HTTP transport) renders Prometheus text;
-# `gatekeeper stats` reads the ledger. The alert webhook URL lives in .env
-# (GATEKEEPER_ALERT_WEBHOOK — may embed a token); unset = alerting off.
+# Operator alerting: a deny spike in this window fires the webhook in GATEKEEPER_ALERT_WEBHOOK.
 observability:
-  deny_spike: { window_s: 60, threshold: 10 }   # one alert per breach episode (re-arms on drain)
+  deny_spike: { window_s: 60, threshold: 10 }
 
-# Performance budget — the added gateway overhead over a direct upstream call
-# (classify + Cedar eval + keyed-HMAC + SQLite append, EXCLUDING upstream I/O).
-# Measured + gated by tests/eval/bench_governance_latency.py (the /eval baseline,
-# ADR-001 latency budget). A p95 above this is a regression and fails the harness.
+# Latency budgets checked by the benchmark harness (tests/eval), not by the gateway itself.
 perf:
-  overhead_p95_ms: 10.0    # ADR-001 / Architecture#Perf budget: p95 < ~10 ms (M1, deterministic)
-  # M3.1 addendum: HTTP transport may add < ~5 ms p95 over stdio on loopback (was aspirational;
-  # measured + gated by tests/eval/bench_transport_overhead.py — the M3 /eval re-measurement).
+  overhead_p95_ms: 10.0
   http_transport_overhead_p95_ms: 5.0
