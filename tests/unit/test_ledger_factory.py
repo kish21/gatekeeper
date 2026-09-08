@@ -33,13 +33,11 @@ def test_open_ledger_maps_unwritable_dir_to_configerror_with_config_dir_hint(
 
 
 def test_open_ledger_opens_an_existing_ledger(tmp_path: Path) -> None:
-    # Happy path: a writable dir + a migrated table yields a usable store (no error).
-    import sqlalchemy as sa
-
-    from gatekeeper.db.base import Base
-
+    # Happy path: a writable dir + an already-migrated ledger yields a usable store (no error).
+    # Built through the migrations, like every real ledger: a schema created any other way is a
+    # state the product cannot produce, and pretending otherwise hides the upgrade path below.
     db = tmp_path / "audit.db"
-    Base.metadata.create_all(sa.create_engine(f"sqlite:///{db}"))
+    factory.migrate(str(db))
     settings = Settings(hmac_key="k" * 64)
     config: dict[str, Any] = {"platform": {"ledger": {"path": str(db)}}}
 
@@ -76,3 +74,62 @@ def test_open_ledger_creates_the_schema_when_missing(tmp_path: Path) -> None:
         .all()
     )
     assert versions == [(head,)]
+
+
+def test_an_existing_ledger_is_upgraded_when_the_schema_moves_on(tmp_path: Path) -> None:
+    """A ledger created by an older version must migrate itself on open, not fail on every write.
+
+    Checking only that the tables EXIST was not enough, and the failure mode was ugly: an install
+    that had been running for months already had them, so a migration adding a column never ran
+    and every append then failed against the missing column. This pins the fix, and the promise
+    that comes with it — records written under the old schema still verify afterwards.
+    """
+    import sqlalchemy as sa
+    from alembic.script import ScriptDirectory
+
+    from gatekeeper.adapters.ledger.sql import SqlLedgerStore
+    from gatekeeper.schemas.enums import ActionKind, Verdict
+    from gatekeeper.schemas.ledger import LedgerEntry
+
+    db = str(tmp_path / "old.db")
+    factory.migrate(db)
+
+    # Wind the ledger back to how an older install looks: the key_id column and the checkpoint
+    # table did not exist, and alembic recorded the revision before them.
+    engine = sa.create_engine(f"sqlite:///{db}")
+    with engine.begin() as conn:
+        conn.execute(sa.text("ALTER TABLE ledger_entry DROP COLUMN key_id"))
+        conn.execute(sa.text("DROP TABLE ledger_checkpoint"))
+        conn.execute(
+            sa.text("UPDATE alembic_version SET version_num = '0003_approval_decided_method'")
+        )
+    engine.dispose()
+
+    settings = Settings(hmac_key="k" * 64)
+    config: dict[str, Any] = {"platform": {"ledger": {"path": db}}}
+    store = factory.open_ledger(settings, config)
+    try:
+        head = ScriptDirectory(str(factory.MIGRATIONS_DIR)).get_current_head()
+        with sa.create_engine(f"sqlite:///{db}").connect() as conn:
+            at = conn.execute(sa.text("select version_num from alembic_version")).scalar_one()
+        assert at == head, "opening an out-of-date ledger must bring it to head"
+
+        # and the upgraded ledger works: it can be written to, and it verifies.
+        store.append(
+            LedgerEntry(
+                call_id="after-upgrade",
+                ts="2026-09-08T10:00:00+00:00",
+                principal="alice",
+                role="operator",
+                upstream="demo",
+                tool="write_file",
+                action_kind=ActionKind.WRITE,
+                verdict=Verdict.ALLOW,
+                reason="written after the upgrade",
+                payload_hash="a" * 64,
+            )
+        )
+        assert store.verify().ok is True
+    finally:
+        store.close()
+    assert isinstance(store, SqlLedgerStore)

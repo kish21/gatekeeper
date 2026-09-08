@@ -20,16 +20,26 @@
 #     Container Apps secret — the repository's demo tokens are never exposed to the internet
 #   * a ready-to-run probe command printed at the end that exercises allow / deny / identity
 #
+#   * a DURABLE audit ledger on a managed PostgreSQL database: the records survive the replica
+#     being replaced, `verify` works from any process, and more than one replica may serve.
+#     Already have a database? Set GK_PG_URL to its connection string and no server is created.
+#   * the approvals desk at /ui, behind its own generated token
+#
 # What it does NOT give you yet (honest):
-#   * a DURABLE audit ledger. By default the ledger lives on the container's own disk: correct
-#     and tamper-evident while the replica runs, lost when it restarts. Azure Files (SMB) was
-#     measured to corrupt SQLite (audit.db stayed 0 bytes, records lost), so it is NOT the default;
-#     GK_LEDGER_STORAGE=files provisions it anyway if you want to try. Durable hosted audit
-#     (Postgres ledger or an NFS share) is the tracked follow-up — see docs/deploy/azure-container-apps.md.
 #   * corporate login. This deploys with static tokens. Switch to OIDC by setting env vars on the
 #     app (GATEKEEPER_IDENTITY=oidc + GATEKEEPER_OIDC_*), no rebuild — see the deploy guide.
+#   * anyone being TOLD about a held write, unless you set GK_APPROVAL_WEBHOOK to a Slack/Teams
+#     incoming webhook. Without it, an approver has to be watching the desk.
+#
+# Ledger choice (GK_LEDGER_STORAGE):
+#   postgres   (default) a managed PostgreSQL flexible server — durable, multi-replica safe
+#   ephemeral            the container's own disk: correct while the replica lives, then gone.
+#                        Fine for a throwaway demo, never for anything you must be able to audit.
+#   files                Azure Files (SMB). Measured to CORRUPT SQLite (audit.db stayed 0 bytes,
+#                        records lost across a restart). Kept only so the finding is reproducible.
 #
 # Override any name via env: GK_LOCATION GK_RG GK_APP GK_ENV GK_ACR GK_SUFFIX GK_LEDGER_STORAGE
+#                            GK_PG_URL GK_PG_SERVER GK_PG_ADMIN GK_REPLICAS GK_APPROVAL_WEBHOOK
 set -euo pipefail
 
 # Windows/Git-Bash: keep the Azure CLI's own console output UTF-8 (a cp1252 console otherwise
@@ -54,22 +64,29 @@ LOCATION="${GK_LOCATION:-westeurope}"
 RG="${GK_RG:-gatekeeper-rg}"
 APP="${GK_APP:-gatekeeper}"
 ENVNAME="${GK_ENV:-gatekeeper-env}"
-LEDGER_STORAGE="${GK_LEDGER_STORAGE:-ephemeral}"   # ephemeral | files
+LEDGER_STORAGE="${GK_LEDGER_STORAGE:-postgres}"   # postgres | ephemeral | files
+REPLICAS="${GK_REPLICAS:-1}"                      # >1 is safe ONLY on the postgres ledger
 # Registry names must be globally unique + lowercase alphanumeric: derive a deterministic
 # per-subscription suffix so re-runs converge on the same resources.
 SUFFIX="${GK_SUFFIX:-$(printf '%s' "$SUB_ID" | tr -dc 'a-f0-9' | cut -c1-12)}"
 ACR="${GK_ACR:-gkacr${SUFFIX}}"
 SA="${GK_SA:-gkled${SUFFIX}}"
 SHARE="ledger"
+PG_SERVER="${GK_PG_SERVER:-gkpg${SUFFIX}}"
+PG_ADMIN="${GK_PG_ADMIN:-gkadmin}"
+PG_DB="gatekeeper"
 # A unique tag per build: Container Apps compares image references, so re-deploying ':latest'
 # is a silent no-op. ':latest' is still pushed as the human-readable pointer.
 IMAGE_NAME="gatekeeper"
 IMAGE_TAG="$IMAGE_NAME:${GK_IMAGE_TAG:-$(date -u +%Y%m%d%H%M%S)}"
 
 case "$LEDGER_STORAGE" in
-  ephemeral|files) ;;
-  *) die "GK_LEDGER_STORAGE must be 'ephemeral' (default) or 'files'." ;;
+  postgres|ephemeral|files) ;;
+  *) die "GK_LEDGER_STORAGE must be 'postgres' (default), 'ephemeral', or 'files'." ;;
 esac
+if [ "$REPLICAS" -gt 1 ] && [ "$LEDGER_STORAGE" != postgres ]; then
+  die "GK_REPLICAS=$REPLICAS needs the postgres ledger: two replicas on one SQLite file are two writers on one chain."
+fi
 
 cat <<EOF
 
@@ -78,8 +95,13 @@ GateKeeper -> Azure Container Apps
   location     : ${LOCATION}
   resource grp : ${RG}
   registry     : ${ACR}.azurecr.io
-  app          : ${APP}   (1 replica, public HTTPS ingress)
-  ledger       : ${LEDGER_STORAGE}$( [ "$LEDGER_STORAGE" = ephemeral ] && printf ' (container disk: lost on restart — see the header)' || printf ' (Azure Files SMB: known to corrupt SQLite — see the header)')
+  app          : ${APP}   (${REPLICAS} replica(s), public HTTPS ingress)
+  ledger       : ${LEDGER_STORAGE}$(
+    case "$LEDGER_STORAGE" in
+      postgres)  [ -n "${GK_PG_URL:-}" ] && printf ' (the database you supplied)' || printf " (a managed PostgreSQL server: ${PG_SERVER})" ;;
+      ephemeral) printf ' (container disk: LOST on restart — see the header)' ;;
+      files)     printf ' (Azure Files SMB: known to corrupt SQLite — see the header)' ;;
+    esac)
 Press Ctrl-C within 5s to abort.
 EOF
 sleep 5
@@ -110,6 +132,36 @@ az provider register -n Microsoft.App --only-show-errors -o none 2>/dev/null || 
 az provider register -n Microsoft.OperationalInsights --only-show-errors -o none 2>/dev/null || true
 az containerapp env create -n "$ENVNAME" -g "$RG" -l "$LOCATION" --only-show-errors -o none
 
+LEDGER_URL=""
+if [ "$LEDGER_STORAGE" = postgres ]; then
+  if [ -n "${GK_PG_URL:-}" ]; then
+    say "2b/4 using the PostgreSQL database you supplied (no server created)"
+    LEDGER_URL="$GK_PG_URL"
+  else
+    say "2b/4 managed PostgreSQL for the audit ledger (a few minutes on a first run)"
+    # Burstable B1ms is the cheapest tier that runs this comfortably; the ledger is small and its
+    # write rate is one row per governed decision.
+    if az postgres flexible-server show -n "$PG_SERVER" -g "$RG" -o none 2>/dev/null; then
+      echo "    server $PG_SERVER exists -> keeping it (and its records)"
+      PG_PASSWORD="$(az containerapp secret show -n "$APP" -g "$RG" --secret-name ledger-url --query value -o tsv 2>/dev/null || echo '')"
+      [ -n "$PG_PASSWORD" ] || die "the server $PG_SERVER exists but this app has no ledger-url secret to reach it with. Pass GK_PG_URL=<connection string> to reuse it."
+      LEDGER_URL="$PG_PASSWORD"
+    else
+      PG_PASSWORD="$(openssl rand -hex 24)"
+      az postgres flexible-server create \
+        -n "$PG_SERVER" -g "$RG" -l "$LOCATION" \
+        --admin-user "$PG_ADMIN" --admin-password "$PG_PASSWORD" \
+        --tier Burstable --sku-name Standard_B1ms --storage-size 32 \
+        --version 16 --database-name "$PG_DB" \
+        --public-access 0.0.0.0 --yes --only-show-errors -o none ||
+        die "could not create the PostgreSQL server. Create one yourself and re-run with GK_PG_URL=<connection string>."
+      # 0.0.0.0 in Azure's firewall means "Azure services", not "the internet": the container app
+      # reaches it, arbitrary hosts do not.
+      LEDGER_URL="postgresql://${PG_ADMIN}:${PG_PASSWORD}@${PG_SERVER}.postgres.database.azure.com:5432/${PG_DB}?sslmode=require"
+    fi
+  fi
+fi
+
 if [ "$LEDGER_STORAGE" = files ]; then
   warn "Azure Files (SMB) does not give SQLite the locking + fsync it needs; measured result: records lost. Proceeding because you asked."
   az storage account create -n "$SA" -g "$RG" -l "$LOCATION" --sku Standard_LRS --only-show-errors -o none
@@ -139,20 +191,44 @@ if az containerapp show -n "$APP" -g "$RG" -o none 2>/dev/null; then
     printf '.'; sleep 5
   done
   printf ' stopped\n'
+  if [ -n "$LEDGER_URL" ]; then
+    az containerapp secret set -n "$APP" -g "$RG" --secrets "ledger-url=$LEDGER_URL" \
+      --only-show-errors -o none
+    az containerapp update -n "$APP" -g "$RG" \
+      --set-env-vars GATEKEEPER_LEDGER_URL=secretref:ledger-url --only-show-errors -o none
+  fi
   az containerapp update -n "$APP" -g "$RG" --image "$ACR_LOGIN/$IMAGE_TAG" \
-    --min-replicas 1 --max-replicas 1 --only-show-errors -o none
+    --min-replicas 1 --max-replicas "$REPLICAS" --only-show-errors -o none
 else
   # Fresh tokens for THIS deployment. Stored as a platform secret, never in the image or config.
   OP_TOKEN="$(openssl rand -hex 24)"
   RO_TOKEN="$(openssl rand -hex 24)"
-  IDENTITIES="operator:operator:${OP_TOKEN};readonly:readonly:${RO_TOKEN}"
+  APPROVER_TOKEN="$(openssl rand -hex 24)"
+  UI_TOKEN="$(openssl rand -hex 24)"
+  # priya is the approver: she may release held writes at the desk and, having no permit in the
+  # Cedar policy, cannot make tool calls of her own.
+  IDENTITIES="operator:operator:${OP_TOKEN};readonly:readonly:${RO_TOKEN};priya:approver:${APPROVER_TOKEN}"
+  SECRETS=("hmac-key=$(openssl rand -hex 32)" "identities=$IDENTITIES" "ui-token=$UI_TOKEN")
+  ENVVARS=(
+    GATEKEEPER_HMAC_KEY=secretref:hmac-key
+    GATEKEEPER_IDENTITIES=secretref:identities
+    GATEKEEPER_UI_TOKEN=secretref:ui-token
+  )
+  if [ -n "$LEDGER_URL" ]; then
+    SECRETS+=("ledger-url=$LEDGER_URL")
+    ENVVARS+=(GATEKEEPER_LEDGER_URL=secretref:ledger-url)
+  fi
+  if [ -n "${GK_APPROVAL_WEBHOOK:-}" ]; then
+    SECRETS+=("approval-webhook=${GK_APPROVAL_WEBHOOK}")
+    ENVVARS+=(GATEKEEPER_APPROVAL_WEBHOOK=secretref:approval-webhook)
+  fi
   az containerapp create -n "$APP" -g "$RG" --environment "$ENVNAME" \
     --registry-server "$ACR_LOGIN" \
     --image "$ACR_LOGIN/$IMAGE_TAG" \
     --target-port 8765 --ingress external \
-    --min-replicas 1 --max-replicas 1 \
-    --secrets "hmac-key=$(openssl rand -hex 32)" "identities=$IDENTITIES" \
-    --env-vars GATEKEEPER_HMAC_KEY=secretref:hmac-key GATEKEEPER_IDENTITIES=secretref:identities \
+    --min-replicas 1 --max-replicas "$REPLICAS" \
+    --secrets "${SECRETS[@]}" \
+    --env-vars "${ENVVARS[@]}" \
     --only-show-errors -o none
 fi
 
@@ -202,14 +278,33 @@ for _ in $(seq 1 40); do
 done
 [ "$OK" = 1 ] || die "/healthz never came up. Inspect: az containerapp logs show -n $APP -g $RG --follow"
 
+# The desk's own URL goes into the held-write notifications, so a message is one click from a
+# decision. Only knowable after the ingress exists, so it is set here — once.
+DESK_URL="https://${FQDN}/ui"
+CURRENT_DESK="$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[?name=='GATEKEEPER_DESK_URL'].value | [0]" -o tsv 2>/dev/null || echo '')"
+if [ "$CURRENT_DESK" != "$DESK_URL" ]; then
+  az containerapp update -n "$APP" -g "$RG" \
+    --set-env-vars "GATEKEEPER_DESK_URL=$DESK_URL" --only-show-errors -o none
+fi
+
 printf '\n\033[1;32mDEPLOYED.\033[0m  https://%s\n' "$FQDN"
 cat <<EOF
 
-Prove it governs, from this machine over the public internet (allow, policy deny, identity deny):
+Prove it governs AND that the audit trail is durable — from this machine, over the internet:
   IDS=\$(az containerapp secret show -n ${APP} -g ${RG} --secret-name identities --query value -o tsv)
+  UIT=\$(az containerapp secret show -n ${APP} -g ${RG} --secret-name ui-token --query value -o tsv)
   python -m scripts.probe_hosted --url "https://${FQDN}" \\
     --operator-token "\$(echo "\$IDS" | cut -d';' -f1 | cut -d: -f3)" \\
-    --readonly-token "\$(echo "\$IDS" | cut -d';' -f2 | cut -d: -f3)"
+    --readonly-token "\$(echo "\$IDS" | cut -d';' -f2 | cut -d: -f3)" \\
+    --ui-token "\$UIT"
+
+Then restart the app and run the SAME probe with --expect-at-least <the number it just reported>.
+The records must still be there; that is the check the first Azure run failed:
+  az containerapp revision restart -n ${APP} -g ${RG} --revision "\$(az containerapp show -n ${APP} -g ${RG} --query properties.latestRevisionName -o tsv)"
+
+The desk (approvals, activity, the integrity check, the governed servers):
+  ${DESK_URL}       sign in with the approver token:
+  echo "\$IDS" | cut -d';' -f3 | cut -d: -f3
 
 Look at the audit trail inside the running container:
   az containerapp exec -n ${APP} -g ${RG} --command "gatekeeper tail --with-id"

@@ -12,7 +12,8 @@ When an AI assistant can read files, open tickets, or change records, three ques
 | Question | Without GateKeeper | With GateKeeper |
 |---|---|---|
 | Who is the AI acting as? | A shared password nobody can trace | Every call carries an identity and a role, recorded on every line |
-| What is it allowed to do? | Whatever it can be talked into | A readable rulebook, and a write waits until a named human says yes |
+| What is it allowed to do? | Whatever it can be talked into | A readable rulebook that reads the arguments — not `main`, not the customers table, not an outside address |
+| Who said yes? | Someone's name typed into a box | A person who signed in, who is not the person who asked, recorded with how they proved it |
 | What did it actually do? | A log file anyone could edit | A hash-chained ledger you can *prove* was never altered |
 
 The last row is the point. You do not have to trust the gateway. You can check it.
@@ -104,6 +105,7 @@ Look at what happened whenever you like:
 gatekeeper tail --with-id     # the audit trail
 gatekeeper show <id>          # one call: who, what, each decision, the outcome
 gatekeeper verify             # exit 0 = untampered; prints a head hash you can pin
+gatekeeper export --format cef --since 2026-01-01   # hand it to your SIEM
 ```
 
 No assistant installed yet? `python -m scripts.agent read_file path=welcome.txt` makes one call
@@ -137,6 +139,10 @@ The same gateway runs as a container over HTTPS, with your corporate login (OIDC
 Google) deciding each caller's role. Everything a hosted deployment differs on is an environment
 variable, so you never rebuild the image to change a hostname or switch identity providers.
 
+The audit trail lives in a managed Postgres database, so it survives the container being replaced
+and more than one replica can serve at once — appends serialize on a database lock, so the chain
+stays single and verifiable.
+
 ```bash
 az login && bash scripts/deploy_azure.sh     # Azure Container Apps, one command, safe to re-run
 ```
@@ -148,14 +154,19 @@ See [Deploy to Azure](docs/deploy/azure-container-apps.md), including what is an
 | Capability | Status |
 |---|---|
 | Every call authenticated, policy-checked, recorded before it is forwarded | Works today |
-| Writes held for a named human to approve or deny, with a timeout that counts as no | Works today |
+| Rules that read the arguments: not `main`, not the customers table, not an outside address | Works today |
+| Writes held for a **verified** human — four-eyes, approver roles, and how they signed in is recorded | Works today |
+| Held writes announced to Slack or Teams, with a link to the desk | Works today |
+| Risk scoring, so only the writes that deserve a person stop at the desk | Works today |
 | A web desk for approvals, activity, the integrity check and the governed servers | Works today |
 | Mail, Jira, database, SharePoint and GitHub governed in one demo, real servers one config block away | Works today (demo twins) |
 | Tamper-evident ledger; `verify` pinpoints any altered, inserted, or removed record | Works today |
+| **Durable hosted ledger on Postgres, safe with more than one replica** | Works today |
+| Export to a SIEM, retention under a signed checkpoint, chain-key rotation | Works today |
 | Any MCP server governed by config alone, credentials referenced by name | Works today |
 | HTTP transport, OIDC login, container image, `/metrics`, deny-spike alerts | Works today |
-| One-command Azure deploy with fresh per-deployment tokens | Works today; the hosted ledger is not yet durable across restarts |
-| AI risk-scoring so only risky writes need approval | Next milestone, not built |
+| One-command Azure deploy: Postgres ledger, the desk, per-deployment tokens | Works today |
+| An LLM risk classifier alongside the deterministic one | Not built; the seam is open, see [risk scoring](docs/features/risk-scoring.md) |
 
 ## Learn more
 

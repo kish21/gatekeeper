@@ -95,11 +95,11 @@ def _utc_now_iso() -> str:
 def _decider(outcome: ApprovalRequest) -> str:
     """The approver as the ledger names them: who, and how that name was proven.
 
-    An auditor reading "approved by priya (oidc)" three years from now can tell that priya signed
-    in with the company login; "(local)" says a name was typed into a loopback page. Recording the
-    proof next to the name is what stops the audit trail from over-claiming.
+    An auditor reading "approved by priya via oidc" three years from now can tell that priya
+    signed in with the company login; "via local" says a name was typed into a loopback page.
+    Recording the proof next to the name is what stops the audit trail from over-claiming.
     """
-    method = f", {outcome.decided_method}" if outcome.decided_method else ""
+    method = f" via {outcome.decided_method}" if outcome.decided_method else ""
     return f"{outcome.decided_by}{method}"
 
 

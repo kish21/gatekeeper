@@ -5,6 +5,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+### Added — enterprise readiness (the six blockers, and M3.3's open defect)
+- **A durable ledger.** `GATEKEEPER_LEDGER_URL` puts the audit trail in a managed PostgreSQL
+  database instead of a local file: it survives the container being replaced, `verify` works from
+  any process, and more than one replica can serve — appends serialize on a transaction-scoped
+  advisory lock, so the chain stays single. One store over both engines; the SQLite file remains
+  the default for one machine. Closes the defect the first live Azure run found (records lost on
+  Azure Files/SMB and on the container disk). `doctor` now FAILS a network-facing gateway that is
+  still on the file ledger.
+- **An approval names someone who proved they are that person.** The desk authenticates approvers
+  against the same identity the gateway uses for callers (OIDC, or a personal token), and records
+  HOW the name was proven — `oidc`, `token`, `console`, `local`. A typed name is refused on any
+  desk reachable beyond loopback; only configured `approver_roles` may decide; and four-eyes stops
+  anyone approving their own call. Same rules in the desk and the CLI (migration 0003).
+- **Rules that read the arguments.** Cedar now receives the call's arguments plus normalized
+  attributes — `branch`, `path`, `table`, `statement`, `recipients`, `domains`, `amount` — so a
+  rule can say "not on `main`", "not the customers table", "not to an outside address". Five
+  guardrails ship in `policies/gatekeeper.cedar`; a `forbid` beats every `permit`, including an
+  admin's, and the `@id` of the rule that fired is recorded in the ledger.
+- **Held writes are announced** to a Slack/Teams incoming webhook with a link to the desk, and the
+  decision is announced too. Fire-and-forget off the hot path: a dead webhook can never delay or
+  fail a governed call. The default timeout moves from 90 s to 5 minutes.
+- **Risk scoring (M2.1).** Each write scores from configured signals; `risk.hold_at` decides which
+  ones stop at the desk. The score is recorded with the signals that fired, never decides
+  allow/deny, and an unscored write is still held. Ships at `hold_at: 0` — every write waits —
+  so nothing changes until you tune it.
+- **Operating the ledger:** `gatekeeper export` (jsonl/csv/CEF, date-filtered, streamed) for a
+  SIEM; `gatekeeper archive --prune`, which removes old records only under a **signed checkpoint**
+  that `verify` resumes from, so trimming can never make a deletion undetectable; and
+  `gatekeeper rotate-key`, after which every earlier record still verifies under the key that
+  signed it (migration 0004). `verify --json` for a cron check.
+- The Azure deploy provisions Postgres (or uses `GK_PG_URL`), serves the desk behind its own
+  token, wires the approver identity, and prints the durability proof: restart the app, re-run the
+  probe with `--expect-at-least`. The probe gained T7 (a second process reads and verifies the
+  ledger) and T8 (the records survived a restart).
+
 ### Added — the desk, and the whole company behind the guard
 - **`gatekeeper ui`**, a web page for the people who are not engineers: writes waiting for a
   decision as cards with Approve/Deny and a reason; the activity as a filterable list with each

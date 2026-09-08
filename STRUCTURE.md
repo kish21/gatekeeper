@@ -19,22 +19,23 @@ gatekeeper/
 ├── policies/gatekeeper.cedar   # the rulebook: role x read/write -> allow; deny by default
 │
 ├── src/gatekeeper/         # ── the package ──
-│   ├── cli/                #   `gatekeeper` init · doctor · serve · ui · pending · approve · deny · tail · verify · show · stats
+│   ├── cli/                #   `gatekeeper` init · doctor · serve · ui · pending · approve · deny
+│                           #     · tail · verify · show · stats · export · archive · rotate-key
 │   ├── ui/                 #   the desk: approvals, activity, trust, servers (one HTML page + a JSON API)
 │   ├── transport/          #   MCP bindings: stdio (one identity per process) and HTTP (per-request)
 │   ├── gateway/            #   the pipeline: identity -> classify -> policy -> [hold for a human] -> audit -> forward -> audit
-│   ├── domain/             #   pure logic: read/write classification, error types
+│   ├── domain/             #   pure logic: classification, argument attributes, risk, approver rules
 │   ├── ports/              #   the interfaces: IdentityResolver, PolicyEngine, LedgerStore, UpstreamClient, ApprovalQueue
 │   ├── adapters/           #   the implementations (the only SDK imports)
 │   │   ├── identity/       #     static_token · oidc
 │   │   ├── policy/         #     cedar
-│   │   ├── ledger/         #     sqlite (WAL, single writer) + the keyed-HMAC hash chain + auto-migrate
-│   │   ├── approval/       #     sqlite queue of held writes, decided from another process
+│   │   ├── ledger/         #     sql: sqlite (one machine) or postgres (durable, many replicas)
+│   │   ├── approval/       #     sql queue of held writes, decided from another process
 │   │   └── upstream/       #     mcp_client: launches governed servers with a minimal environment
 │   ├── schemas/            #   typed DTOs: ToolCall, ToolResult, Principal, Decision, LedgerEntry
 │   ├── config/             #   loader: .env + YAML + GATEKEEPER_* overrides, project-root paths
 │   ├── db/                 #   engine setup + Alembic migrations (shipped inside the package)
-│   └── infra/              #   JSON logging, metrics, alerts
+│   └── infra/              #   JSON logging, metrics, alerts, held-write notifications
 │
 ├── deploy/container/entrypoint.sh   # `exec gatekeeper serve`
 ├── scripts/                # demo.py · demo_company.py · demo_enterprise.py · agent.py · deploy_azure.sh · probe_hosted.py · windows/*.bat

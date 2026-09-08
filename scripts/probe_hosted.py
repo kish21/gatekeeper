@@ -15,6 +15,15 @@ It asserts the five claims a hosted gateway must survive, and exits non-zero if 
   T4  DENY (RBAC)     a read-only principal's write           -> refused, never forwarded
   T5  DENY (IDENTITY) an unknown bearer token                 -> refused, fail-closed
   T6  OBSERVABLE      GET /metrics returns Prometheus text
+  T7  DURABLE AUDIT   a SECOND process reads the ledger back and the chain verifies
+  T8  SURVIVES A RESTART   (with --expect-at-least N) the records written before a restart
+                           are still there afterwards
+
+T7 and T8 are the checks the first live Azure run failed. On the container's own disk the records
+die with the replica; on Azure Files (SMB) the database read back as zero bytes from a second
+process. Both need the desk's token (--ui-token), because they ask the gateway to open the ledger
+from a different process than the one serving calls — which is exactly the thing that used to
+break.
 
 The tokens default to the image's DEMO static tokens (``config/identities.yaml`` — intentionally
 fake placeholders, smoke-test only). Override them via ``--operator-token`` / ``--readonly-token``
@@ -122,7 +131,33 @@ async def _governed_call(
         return ("error", _root_cause(exc)[:140])
 
 
-async def run(base: str, operator_token: str, readonly_token: str) -> int:
+async def _verify_over_https(base: str, ui_token: str) -> tuple[bool, str]:
+    """Ask the running gateway to verify its own chain, from a SECOND process.
+
+    The desk opens its own connection to the ledger rather than sharing the serving process's, so
+    a PASS here is evidence of the property Azure Files silently broke: the audit trail is
+    readable, and verifiable, by something other than the writer.
+    """
+    headers = {"Authorization": f"Bearer {ui_token}"} if ui_token else {}
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http:
+        response = await http.post(f"{base}/ui/api/verify", headers=headers)
+        if response.status_code == 404:
+            return (False, "the desk is not mounted (set GATEKEEPER_UI_TOKEN on the app)")
+        if response.status_code == 401:
+            return (False, "the desk refused this token (--ui-token)")
+        response.raise_for_status()
+        body = response.json()
+        detail = str(body.get("detail", ""))[:90]
+        return (bool(body.get("ok")), f"{body.get('checked')} entries, {detail}")
+
+
+async def run(
+    base: str,
+    operator_token: str,
+    readonly_token: str,
+    ui_token: str = "",
+    expect_at_least: int = 0,
+) -> int:
     console = Console()
     probe = Probe(console)
     console.rule(f"[bold]Probing {base}")
@@ -234,6 +269,50 @@ async def run(base: str, operator_token: str, readonly_token: str) -> int:
                 evidence=f"{type(exc).__name__}: {str(exc)[:100]}",
             )
 
+    # --- T7 durable audit: a second process can read and verify the chain -------------------
+    if ui_token:
+        try:
+            ok, evidence = await _verify_over_https(base, ui_token)
+            probe.record(
+                "T7 DURABLE AUDIT",
+                "a second process reads the ledger back and verifies it",
+                passed=ok,
+                evidence=evidence,
+            )
+        except Exception as exc:  # noqa: BLE001
+            probe.record(
+                "T7 DURABLE AUDIT",
+                "a second process reads the ledger back and verifies it",
+                passed=False,
+                evidence=_root_cause(exc)[:140],
+            )
+
+        # --- T8 the records survived a restart --------------------------------------------
+        if expect_at_least:
+            try:
+                headers = {"Authorization": f"Bearer {ui_token}"}
+                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http:
+                    summary = (await http.get(f"{base}/ui/api/summary", headers=headers)).json()
+                calls = int(summary.get("calls", 0))
+                probe.record(
+                    "T8 SURVIVES RESTART",
+                    f"at least {expect_at_least} calls still recorded",
+                    passed=calls >= expect_at_least,
+                    evidence=f"{calls} calls in the ledger (expected >= {expect_at_least})",
+                )
+            except Exception as exc:  # noqa: BLE001
+                probe.record(
+                    "T8 SURVIVES RESTART",
+                    f"at least {expect_at_least} calls still recorded",
+                    passed=False,
+                    evidence=_root_cause(exc)[:140],
+                )
+    else:
+        console.print(
+            "  [yellow]SKIP[/]  T7/T8 durable audit — pass --ui-token to check that the ledger "
+            "survives and is readable from another process"
+        )
+
     probe.report()
     if probe.failed:
         console.print(f"\n[bold red]{probe.failed} test(s) FAILED.[/]")
@@ -260,9 +339,30 @@ def main() -> int:
     parser.add_argument(
         "--readonly-token", default=DEFAULT_READONLY_TOKEN, help="bearer for the RBAC DENY case"
     )
+    parser.add_argument(
+        "--ui-token",
+        default="",
+        help="the desk's token (GATEKEEPER_UI_TOKEN). Enables the durable-audit checks: "
+        "the ledger read back and verified from a process other than the one serving calls.",
+    )
+    parser.add_argument(
+        "--expect-at-least",
+        type=int,
+        default=0,
+        help="fail unless at least this many calls are still recorded. Run once before a "
+        "restart to learn the number, then again after it to prove the records survived.",
+    )
     args = parser.parse_args()
     base = args.url.rstrip("/").removesuffix("/mcp")
-    return asyncio.run(run(base, args.operator_token, args.readonly_token))
+    return asyncio.run(
+        run(
+            base,
+            args.operator_token,
+            args.readonly_token,
+            args.ui_token,
+            args.expect_at_least,
+        )
+    )
 
 
 if __name__ == "__main__":

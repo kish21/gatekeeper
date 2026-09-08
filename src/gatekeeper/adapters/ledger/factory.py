@@ -14,7 +14,8 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import Engine, inspect
+from alembic.script import ScriptDirectory
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.ledger.sql import SqlLedgerStore
@@ -48,9 +49,27 @@ def migrate(target: str) -> None:
     command.upgrade(cfg, "head")
 
 
-def _ensure_schema(engine: Engine, target: str) -> None:
+def _current_revision(engine: Engine) -> str | None:
+    """The migration this ledger is at, or ``None`` if it has never been migrated."""
     inspector = inspect(engine)
-    if not all(inspector.has_table(t) for t in ("ledger_entry", "approval_request")):
+    if not inspector.has_table("alembic_version"):
+        return None
+    with engine.connect() as connection:
+        row = connection.execute(text("select version_num from alembic_version")).first()
+    return str(row[0]) if row else None
+
+
+def _ensure_schema(engine: Engine, target: str) -> None:
+    """Bring an existing ledger up to date, and create a missing one.
+
+    Checking only that the TABLES exist was not enough: a ledger created by an older version
+    already has them, so a migration that adds a column would never run and every append would
+    fail against the missing column. Comparing the recorded revision against the migrations
+    shipped in this package catches that — an upgrade migrates itself on first open, exactly as a
+    fresh install does, which is what makes "no separate migrate step" true for BOTH.
+    """
+    head = ScriptDirectory(str(MIGRATIONS_DIR)).get_current_head()
+    if _current_revision(engine) != head:
         migrate(target)
 
 
