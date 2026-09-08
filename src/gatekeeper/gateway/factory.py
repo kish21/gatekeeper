@@ -20,6 +20,7 @@ from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
 from gatekeeper.adapters.upstream.mcp_client import McpUpstreamClient
 from gatekeeper.config.loader import ConfigError, boot, get_settings, policy_dir, secret_source
 from gatekeeper.domain.classify import ActionClassifier
+from gatekeeper.domain.risk import RiskScorer, hold_threshold
 from gatekeeper.gateway.pipeline import ApprovalPolicy, GatewayPipeline
 from gatekeeper.infra.alerts import DenySpikeDetector, WebhookAlerter
 from gatekeeper.infra.notify import notifier_from_settings
@@ -78,6 +79,7 @@ def approval_policy_from_config(product: dict[str, Any]) -> ApprovalPolicy:
         writes_require=str(approval.get("writes", "off")).lower() == "require",
         timeout_s=float(approval.get("timeout_s", DEFAULT_APPROVAL_TIMEOUT_S)),
         exempt_roles=frozenset(str(r) for r in (approval.get("exempt_roles") or [])),
+        hold_at=hold_threshold(product),
     )
 
 
@@ -151,6 +153,7 @@ def build_pipeline(
         approvals=open_approvals(ledger) if approval_policy.writes_require else None,
         approval_policy=approval_policy,
         notifier=notifier_from_settings(get_settings()),
+        risk=RiskScorer.from_config(product),
     )
     return GatewayRuntime(pipeline=pipeline, identity=identity, upstream=upstream, ledger=ledger)
 

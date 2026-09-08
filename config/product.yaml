@@ -28,3 +28,58 @@ approval:
   # is not a login: decisions made this way are recorded as `console`. Set false to require a
   # verified approver for every release.
   console_approvals: true
+
+# --- how risky is a write? (M2.1) --------------------------------------------------------------
+# Holding EVERY write is the right way to start and the wrong place to stay: forty approvals a day
+# turns a careful reviewer into a clicking machine, and the one that mattered goes through with the
+# rest. So each write is scored, and `hold_at` decides which ones are worth a person.
+#
+# The score never changes allow/deny — the rulebook in policies/ does that. It decides how much
+# human attention a write earns. It is arithmetic over the same attributes the policy sees, so a
+# score can be explained to whoever was woken up by it, and reproduced later in an audit.
+#
+# `hold_at: 0` means every write waits for a person. That is the default deliberately: run it that
+# way until you can see what your assistants actually do, then raise it. A sensible second step is
+# 0.5 with the signals below, which holds anything touching production, customer data, destructive
+# wording, outside recipients or large amounts, and lets ordinary work through.
+risk:
+  hold_at: 0                 # >= this stops at the desk. 0 = hold every write.
+  base: 0.3                  # a write with no signals is still a change to a real system
+
+  signals:
+    - id: production-branch
+      weight: 0.4
+      attribute: branch
+      equals: [main, master, production, prod, release]
+
+    - id: destructive-wording
+      weight: 0.4
+      text: ["delete ", "drop ", "truncate", "purge", "revoke", "--force", "rm -rf"]
+
+    - id: customer-or-payment-data
+      weight: 0.3
+      attribute: table
+      equals: [customers, payments, invoices, users, accounts]
+
+    - id: recipient-outside-the-company
+      weight: 0.4
+      attribute: domains
+      outside: [corp.example]   # put YOUR domains here; anything else counts as outside
+
+    - id: large-amount
+      weight: 0.3
+      attribute: amount
+      at_least: 10000
+
+    - id: secrets-path
+      weight: 0.4
+      text: ["/secrets/", ".env", "credential", "private_key"]
+
+  # The handful nobody wants automated, whatever they score.
+  always_hold:
+    - github:merge_pull_request
+    - github:delete_branch
+    - database:execute
+
+  # Holes in the gate, by choice. Keep this list empty unless you can say why.
+  never_hold: []
