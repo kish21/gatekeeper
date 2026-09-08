@@ -23,3 +23,8 @@ permit (
   action == Action::"read",
   resource
 );
+
+// approver: deliberately absent. Someone who releases other people's writes should not also be
+// making tool calls, so no permit names this role and Cedar's default-deny does the rest — an
+// approver's own call is denied, and the ledger records it. Who may APPROVE is a separate list
+// (product.yaml approval.approver_roles), because approving is not a tool call.

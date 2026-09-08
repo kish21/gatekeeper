@@ -26,6 +26,10 @@ from gatekeeper.ports.identity import IdentityResolver
 from gatekeeper.ports.policy import PolicyEngine
 
 _DEFAULT_UPSTREAM_TIMEOUT = 30.0
+#: Seconds a held write waits for a person when product.yaml does not say. Long enough that a
+#: notification can reach someone and they can read what the call wants to do; short enough that a
+#: forgotten request resolves itself (as a deny) instead of pinning a connection forever.
+DEFAULT_APPROVAL_TIMEOUT_S = 300.0
 
 
 @dataclass
@@ -40,6 +44,12 @@ class GatewayRuntime:
     async def aclose(self) -> None:
         await self.upstream.aclose()
         self.ledger.close()
+
+
+def build_identity(config: dict[str, Any]) -> IdentityResolver:
+    """The configured identity resolver. Public because the desk authenticates approvers against
+    the SAME source the gateway authenticates callers with — one identity model, not two."""
+    return _build_identity(config["platform"], config.get("identities") or [])
 
 
 def _build_identity(platform: dict[str, Any], identities: list[dict[str, Any]]) -> IdentityResolver:
@@ -65,7 +75,7 @@ def approval_policy_from_config(product: dict[str, Any]) -> ApprovalPolicy:
     approval = product.get("approval", {}) or {}
     return ApprovalPolicy(
         writes_require=str(approval.get("writes", "off")).lower() == "require",
-        timeout_s=float(approval.get("timeout_s", 90)),
+        timeout_s=float(approval.get("timeout_s", DEFAULT_APPROVAL_TIMEOUT_S)),
         exempt_roles=frozenset(str(r) for r in (approval.get("exempt_roles") or [])),
     )
 

@@ -7,10 +7,24 @@
 write_detection:
   name_patterns: ["create*", "update*", "delete*", "write*", "put*", "exec*", "run*", "send*"]
 
-# Human approval of writes. A write the policy allows is HELD until someone runs
-# `gatekeeper approve <id>` (or `deny`); no decision within the timeout is a deny. Reads are
-# never held. GATEKEEPER_APPROVAL_WRITES=require|off and GATEKEEPER_APPROVAL_TIMEOUT_S override.
+# Human approval of writes. A write the policy allows is HELD until someone decides it at the desk
+# or with `gatekeeper approve <id>`; no decision within the timeout is a deny. Reads are never held.
+# GATEKEEPER_APPROVAL_WRITES=require|off and GATEKEEPER_APPROVAL_TIMEOUT_S override.
 approval:
   writes: require
-  timeout_s: 90            # keep under your MCP host's tool timeout so a late approval can't act
+  # How long a held write waits. Keep it under your MCP host's tool timeout, or a late approval
+  # arrives after the agent has already given up. Five minutes suits a notified approver; lower it
+  # if your host is impatient.
+  timeout_s: 300
   exempt_roles: [admin]    # roles whose writes go straight through (still recorded)
+
+  # --- who may release a held write ---------------------------------------------------------
+  # Roles allowed to decide. Empty = any identity the gateway can authenticate. Name your approver
+  # group here (an OIDC group mapped to this role, or a role in identities.yaml).
+  approver_roles: [approver, admin]
+  # Nobody approves their own call. This is the difference between a gate and a formality.
+  four_eyes: true
+  # Allow `gatekeeper approve` from a shell on the gateway host. That shell is privileged, but it
+  # is not a login: decisions made this way are recorded as `console`. Set false to require a
+  # verified approver for every release.
+  console_approvals: true

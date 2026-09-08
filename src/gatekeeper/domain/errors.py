@@ -26,3 +26,11 @@ class UpstreamError(GatewayError):
 
 class ApprovalDenied(GatewayError):
     """A held write was denied by a human, timed out, or was cancelled. Never forwarded."""
+
+
+class ApprovalRefused(GatewayError):
+    """This person may not decide this request (unverified, wrong role, or their own call).
+
+    Distinct from ``ApprovalDenied``: nothing was decided. The held write stays pending for
+    somebody who is allowed to decide it.
+    """

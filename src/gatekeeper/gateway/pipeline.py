@@ -76,10 +76,21 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _decider(outcome: ApprovalRequest) -> str:
+    """The approver as the ledger names them: who, and how that name was proven.
+
+    An auditor reading "approved by priya (oidc)" three years from now can tell that priya signed
+    in with the company login; "(local)" says a name was typed into a loopback page. Recording the
+    proof next to the name is what stops the audit trail from over-claiming.
+    """
+    method = f", {outcome.decided_method}" if outcome.decided_method else ""
+    return f"{outcome.decided_by}{method}"
+
+
 def _approval_deny_reason(outcome: ApprovalRequest, timeout_s: float) -> str:
     if outcome.status is ApprovalStatus.DENIED:
         note = f": {outcome.note}" if outcome.note else ""
-        return f"denied by {outcome.decided_by} (request {outcome.id}){note}"
+        return f"denied by {_decider(outcome)} (request {outcome.id}){note}"
     if outcome.status is ApprovalStatus.EXPIRED:
         return f"approval timed out after {timeout_s:g}s (request {outcome.id})"
     return f"approval {outcome.status.value} (request {outcome.id})"
@@ -247,7 +258,7 @@ class GatewayPipeline:
             if outcome.status is ApprovalStatus.APPROVED:
                 audit(
                     verdict=Verdict.ALLOW,
-                    reason=f"approved by {outcome.decided_by} (request {outcome.id})",
+                    reason=f"approved by {_decider(outcome)} (request {outcome.id})",
                     result_summary="",
                 )
             else:

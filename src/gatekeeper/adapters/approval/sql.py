@@ -70,7 +70,13 @@ class SqlApprovalQueue:
             self._session.rollback()
 
     def decide(
-        self, request_id: str, status: ApprovalStatus, *, by: str, note: str = ""
+        self,
+        request_id: str,
+        status: ApprovalStatus,
+        *,
+        by: str,
+        note: str = "",
+        method: str = "",
     ) -> ApprovalRequest:
         if status is ApprovalStatus.PENDING:
             raise ApprovalStateError("a decision must be a final status")
@@ -91,6 +97,7 @@ class SqlApprovalQueue:
                 )
             row.status = status.value
             row.decided_by = by
+            row.decided_method = method
             row.decided_at = _now()
             row.note = note
             row.arguments_preview = ""  # the preview served its purpose; do not keep raw args

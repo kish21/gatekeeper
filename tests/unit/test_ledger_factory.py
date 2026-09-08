@@ -62,13 +62,17 @@ def test_open_ledger_creates_the_schema_when_missing(tmp_path: Path) -> None:
         assert store.verify().ok
     finally:
         store.close()
-    # And the migration is the schema's single source: alembic knows the DB is at head.
+    # And the migration is the schema's single source: alembic knows the DB is at head. The head
+    # is read from the migration scripts rather than pinned here, so adding a migration does not
+    # need this test edited — only a ledger that stopped migrating itself should fail it.
     import sqlalchemy as sa
+    from alembic.script import ScriptDirectory
 
+    head = ScriptDirectory(str(factory.MIGRATIONS_DIR)).get_current_head()
     versions = (
         sa.create_engine(f"sqlite:///{db}")
         .connect()
         .execute(sa.text("select version_num from alembic_version"))
         .all()
     )
-    assert versions == [("0002_create_approval_request",)]
+    assert versions == [(head,)]

@@ -224,7 +224,11 @@ def create_app(
         from gatekeeper.adapters.ledger.factory import open_ledger
         from gatekeeper.ui import build_router
 
-        app.include_router(build_router(open_ledger, token=ui_token))
+        # A gateway serving HTTP beyond loopback carries a network-facing desk, so a decision
+        # there needs a proven identity: the typed-name path is refused.
+        app.include_router(
+            build_router(open_ledger, token=ui_token, require_verified=bool(ui_token))
+        )
 
     live_metrics = metrics if metrics is not None else default_metrics
 

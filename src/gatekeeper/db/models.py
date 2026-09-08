@@ -60,5 +60,6 @@ class ApprovalRequestRow(Base):
     arguments_preview: Mapped[str] = mapped_column(String, nullable=False, default="")
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending", index=True)
     decided_by: Mapped[str] = mapped_column(String, nullable=False, default="")
+    decided_method: Mapped[str] = mapped_column(String, nullable=False, default="")
     decided_at: Mapped[str] = mapped_column(String, nullable=False, default="")
     note: Mapped[str] = mapped_column(String, nullable=False, default="")

@@ -26,6 +26,9 @@
   .count { font-family:var(--mono); font-size:0.75rem; background:var(--hold-soft); color:var(--hold); border-radius:999px; padding:1px 8px; }
   .count.zero { background:var(--rule-2); color:var(--ink-2); }
   nav .who { margin-top:auto; padding:12px 8px 0; border-top:1px solid var(--rule); font-size:0.85rem; color:var(--ink-2); }
+  nav .who .me { margin-top:4px; display:flex; flex-direction:column; gap:1px; }
+  nav .who .me b { color:var(--ink); font-size:0.95rem; }
+  nav .who .me span { font-size:0.78rem; color:var(--ink-2); }
   nav .who input { width:100%; margin-top:6px; padding:7px 9px; border:1px solid var(--rule); border-radius:6px; background:var(--paper); color:var(--ink); font:inherit; }
   main { padding:28px 32px 60px; max-width:1180px; }
   h1 { font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:1.7rem; margin:0 0 4px; text-wrap:balance; }
@@ -97,7 +100,7 @@
     <button data-view="activity">Activity</button>
     <button data-view="trust">Trust</button>
     <button data-view="servers">Servers</button>
-    <div class="who">Deciding as<input id="who" placeholder="your name" autocomplete="name"></div>
+    <div class="who" id="whoami">Checking who you are&hellip;</div>
   </nav>
   <main id="main"></main>
 </div>
@@ -106,12 +109,30 @@
 <script>
 (() => {
   const $ = (s, r=document) => r.querySelector(s);
-  const state = { view: 'approvals', token: localStorage.getItem('gk_ui_token') || '', who: localStorage.getItem('gk_who') || '', activity: [], open: null, filter: {q:'', verdict:''}, verify: null };
+  const state = { view: 'approvals', token: localStorage.getItem('gk_ui_token') || '', who: localStorage.getItem('gk_who') || '', me: null, activity: [], open: null, filter: {q:'', verdict:''}, verify: null };
   const url = new URL(location.href);
   if (url.searchParams.get('token')) { state.token = url.searchParams.get('token'); localStorage.setItem('gk_ui_token', state.token); history.replaceState({}, '', location.pathname); }
   if (['approvals','activity','trust','servers'].includes(url.searchParams.get('view'))) state.view = url.searchParams.get('view');
-  $('#who').value = state.who;
-  $('#who').addEventListener('input', e => { state.who = e.target.value; localStorage.setItem('gk_who', state.who); });
+
+  // Who the DESK says you are — never who the browser claims. When the gateway can identify you
+  // (a corporate login, or your own token) the decision is recorded under that proven name and
+  // there is nothing to type. Only an open desk on your own machine falls back to a typed name,
+  // and it says so, because that name is an assertion the ledger will mark as unproven.
+  async function whoami() {
+    try { state.me = await api('/ui/api/whoami'); } catch (e) { if (e.message === 'token') return; state.me = null; }
+    const box = $('#whoami');
+    if (!box) return;
+    if (state.me && state.me.signed_in) {
+      box.innerHTML = `Signed in as<div class="me"><b>${esc(state.me.id)}</b><span>${esc(state.me.role || 'no role')} &middot; ${esc(state.me.method)}</span></div>`;
+    } else if (state.me && !state.me.may_decide) {
+      box.innerHTML = `<b>Not signed in</b><div class="me"><span>You can read this desk. Releasing a write needs your own login or token.</span></div>`;
+    } else {
+      box.innerHTML = `Deciding as<input id="who" placeholder="your name" autocomplete="name"><div class="me"><span>Recorded as typed, not verified.</span></div>`;
+      const input = $('#who');
+      input.value = state.who;
+      input.addEventListener('input', e => { state.who = e.target.value; localStorage.setItem('gk_who', state.who); });
+    }
+  }
 
   async function api(path, opts={}) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
@@ -128,8 +149,8 @@
   const ago = ts => { const s = Math.max(0, (Date.now() - Date.parse(ts)) / 1000); return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s/60)}m` : `${Math.round(s/3600)}h`; };
 
   function lock() {
-    $('#main').innerHTML = `<div class="lock panel"><h2>This desk needs a token</h2><p class="sub">The gateway is reachable beyond this machine, so the page requires <span class="mono">GATEKEEPER_UI_TOKEN</span>. Paste it once; it stays in this browser.</p><input id="tok" style="width:100%;padding:8px;border:1px solid var(--rule);border-radius:6px;background:var(--paper);color:var(--ink);font:inherit"><p style="margin-top:10px"><button class="btn approve" id="tokgo">Open the desk</button></p></div>`;
-    $('#tokgo').onclick = () => { state.token = $('#tok').value.trim(); localStorage.setItem('gk_ui_token', state.token); render(); };
+    $('#main').innerHTML = `<div class="lock panel"><h2>Sign in to the desk</h2><p class="sub">This gateway is reachable beyond one machine, so it needs to know who you are. Paste <b>your own token</b> (the one your gateway knows you by) to sign in and be able to release writes &mdash; or the shared <span class="mono">GATEKEEPER_UI_TOKEN</span> to read the desk without deciding. It stays in this browser.</p><input id="tok" style="width:100%;padding:8px;border:1px solid var(--rule);border-radius:6px;background:var(--paper);color:var(--ink);font:inherit"><p style="margin-top:10px"><button class="btn approve" id="tokgo">Open the desk</button></p></div>`;
+    $('#tokgo').onclick = () => { state.token = $('#tok').value.trim(); localStorage.setItem('gk_ui_token', state.token); whoami().then(render); };
   }
 
   // ---------------- Approvals ----------------
@@ -158,12 +179,14 @@
   }
   function pretty(s) { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } }
   async function decide(card, status) {
-    if (!state.who.trim()) { toast('Type your name under "Deciding as" first'); $('#who').focus(); return; }
+    const signedIn = state.me && state.me.signed_in;
+    if (!signedIn && state.me && !state.me.may_decide) { toast('Sign in with your own token to release a write'); return; }
+    if (!signedIn && !state.who.trim()) { toast('Say who is deciding first'); const w = $('#who'); if (w) w.focus(); return; }
     const note = card.querySelector('textarea').value.trim();
     if (status === 'denied' && !note) { toast('A denial needs a reason'); card.querySelector('textarea').focus(); return; }
     card.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
-      const d = await api(`/ui/api/pending/${card.dataset.id}/decision`, { method:'POST', body: JSON.stringify({ status, by: state.who.trim(), note }) });
+      const d = await api(`/ui/api/pending/${card.dataset.id}/decision`, { method:'POST', body: JSON.stringify({ status, by: signedIn ? '' : state.who.trim(), note }) });
       toast(`${status === 'approved' ? 'Approved' : 'Denied'} ${d.id}: ${d.principal} → ${d.upstream}:${d.tool}`);
       await approvals();
     } catch (e) { toast(e.message); card.querySelectorAll('button').forEach(b => b.disabled = false); }
@@ -219,7 +242,7 @@
   async function render() { try { await views[state.view](); } catch (e) { if (e.message !== 'token') $('#main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
   document.querySelectorAll('nav button[data-view]').forEach(b => b.onclick = () => { state.view = b.dataset.view; document.querySelectorAll('nav button[data-view]').forEach(x => x.removeAttribute('aria-current')); b.setAttribute('aria-current','page'); render(); });
   document.querySelectorAll('nav button[data-view]').forEach(b => { if (b.dataset.view === state.view) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current'); });
-  render();
+  whoami().then(render);
   setInterval(async () => { try { if (state.view === 'approvals') await approvals(); else { const l = await api('/ui/api/pending'); $('#nav-pending').textContent = l.length; $('#nav-pending').classList.toggle('zero', l.length === 0); if (state.view === 'activity' && !state.open) await activity(); } } catch {} }, 2000);
 })();
 </script>

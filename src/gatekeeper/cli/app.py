@@ -48,8 +48,11 @@ from gatekeeper.config.loader import (
     validate_security,
 )
 from gatekeeper.db.base import is_url, redact_url
+from gatekeeper.domain.approval_rules import approver_rules_from_config
+from gatekeeper.domain.errors import ApprovalRefused
 from gatekeeper.infra.logging import configure_logging, get_logger
-from gatekeeper.schemas.enums import ApprovalStatus, Verdict
+from gatekeeper.schemas.approval import Approver
+from gatekeeper.schemas.enums import ApprovalStatus, ApproverMethod, Verdict
 
 app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
@@ -621,8 +624,14 @@ def stats(limit: int = 1000) -> None:
 
 
 # --- human approval ---------------------------------------------------------------------------
-def _approver(by: str | None) -> str:
-    return by or getpass.getuser()
+def _approver(by: str | None) -> Approver:
+    """Who is deciding at a terminal on the gateway host.
+
+    ``--by`` names a colleague you are deciding on behalf of; without it the OS user is recorded.
+    Either way the method is ``console``: the proof is a shell on the gateway host, which is a real
+    (and privileged) thing to have, but it is not a login — and the ledger says so.
+    """
+    return Approver(id=by or getpass.getuser(), method=ApproverMethod.CONSOLE)
 
 
 @app.command()
@@ -663,10 +672,24 @@ def _decide(request_id: str, status: ApprovalStatus, by: str | None, note: str) 
     log = get_logger("gatekeeper.approval")
     from gatekeeper.gateway.factory import open_approvals
 
+    approver = _approver(by)
+    rules = approver_rules_from_config(load_config()["product"], require_verified=False)
     with _opened_ledger() as store:
         queue = open_approvals(store)
         try:
-            decided = queue.decide(request_id, status, by=_approver(by), note=note)
+            held = queue.get(request_id)
+            if held is None:
+                _console.print(f"[bold yellow]not decided[/] no approval request {request_id!r}")
+                raise typer.Exit(code=1)
+            # Checked before anything is written, so a refusal leaves the write held for someone
+            # who is allowed to release it — the same rules the desk applies.
+            rules.check(held, approver)
+            decided = queue.decide(
+                request_id, status, by=approver.id, note=note, method=approver.method.value
+            )
+        except ApprovalRefused as exc:
+            _console.print(f"[bold yellow]not decided[/] {exc}")
+            raise typer.Exit(code=1) from exc
         except ApprovalStateError as exc:
             _console.print(f"[bold yellow]not decided[/] {exc}")
             raise typer.Exit(code=1) from exc
@@ -675,14 +698,20 @@ def _decide(request_id: str, status: ApprovalStatus, by: str | None, note: str) 
     color = "green" if status is ApprovalStatus.APPROVED else "red"
     _console.print(
         f"[bold {color}]{status.value.upper()}[/] request {decided.id}: "
-        f"{decided.principal} -> {decided.upstream}:{decided.tool} (by {decided.decided_by})"
+        f"{decided.principal} -> {decided.upstream}:{decided.tool} "
+        f"(by {decided.decided_by}, {decided.decided_method})"
     )
     _console.print(
         "The gateway records this decision in the ledger and acts on it within a second."
     )
     log.info(
         "approval decided",
-        extra={"request": decided.id, "status": status.value, "by": decided.decided_by},
+        extra={
+            "request": decided.id,
+            "status": status.value,
+            "by": decided.decided_by,
+            "method": decided.decided_method,
+        },
     )
 
 
@@ -736,8 +765,13 @@ def ui(
         raise typer.Exit(code=2) from exc
     chosen = port or get_settings().ui_port
     _console.print(f"GateKeeper desk: [bold]http://{host}:{chosen}/ui[/]   (Ctrl-C to stop)")
+    loopback = host in ("127.0.0.1", "localhost", "::1")
     uvicorn.run(
-        create_ui_app(open_ledger, token=token), host=host, port=chosen, log_level="warning"
+        # Beyond loopback a decision needs a proven identity: the desk refuses a typed-in name.
+        create_ui_app(open_ledger, token=token, require_verified=not loopback),
+        host=host,
+        port=chosen,
+        log_level="warning",
     )
 
 
