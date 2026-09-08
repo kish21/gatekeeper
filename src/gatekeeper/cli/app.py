@@ -22,7 +22,7 @@ import secrets
 import shutil
 import sys
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,7 @@ from gatekeeper.gateway.factory import DEFAULT_APPROVAL_TIMEOUT_S
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.schemas.approval import Approver
 from gatekeeper.schemas.enums import ApprovalStatus, ApproverMethod, Verdict
+from gatekeeper.schemas.ledger import LedgerEntry
 
 app = typer.Typer(
     help="GateKeeperAI — verifiable governance gateway for MCP.", no_args_is_help=True
@@ -77,6 +78,7 @@ _DEMO_SAMPLE_TEXT = (
 #: Env keys `init` fills in when they are missing or empty (never overwriting a set value).
 _ENV_HMAC = "GATEKEEPER_HMAC_KEY"
 _ENV_AGENT_TOKEN = "GATEKEEPER_AGENT_TOKEN"  # noqa: S105 — a variable NAME, not a value
+_ENV_HMAC_PREVIOUS = "GATEKEEPER_HMAC_KEY_PREVIOUS"
 
 
 def _ledger_label(config: dict[str, Any]) -> str:
@@ -185,6 +187,23 @@ def _upsert_env(path: Path, updates: dict[str, str]) -> list[str]:
             written.append(key)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return written
+
+
+def _replace_env(path: Path, updates: dict[str, str]) -> None:
+    """Set each key in ``updates``, OVERWRITING any existing value.
+
+    Distinct from ``_upsert_env``, which never touches a value someone already set — right for
+    first-run setup, wrong for a rotation, whose entire purpose is to replace the value that is
+    there. Keeping the two apart means neither can quietly do the other's job.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+    lines.extend(f"{key}={value}" for key, value in remaining.items())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _first_token(identities: list[dict[str, Any]], role: str) -> str:
@@ -518,16 +537,25 @@ def verify(
         "--expect-head",
         help="A head hash printed by an earlier verify. Detects records removed from the end.",
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Machine-readable result, for a cron job or a monitoring check."
+    ),
 ) -> None:
     """Verify audit-ledger integrity. Exit 0=intact, 1=tampered, 2=misconfig.
 
     Pin the printed head somewhere the ledger's host cannot reach (a ticket, a separate log);
-    pass it back with --expect-head to also detect a truncated chain.
+    pass it back with --expect-head to also detect a truncated chain. Run it on a schedule with
+    --json: the exit code is the alert, the JSON is the evidence.
     """
     configure_logging(get_settings().log_level)
     log = get_logger("gatekeeper.verify")
     with _opened_ledger() as store:
         result = store.verify(expected_head=expect_head)
+    if as_json:
+        _console.print_json(result.model_dump_json())
+        if not result.ok:
+            raise typer.Exit(code=1)
+        return
     if result.ok:
         _console.print(f"[bold green]OK[/] ledger intact - {result.checked} entries verified")
         _console.print(f"head: {result.head}")
@@ -547,6 +575,192 @@ def verify(
         {"broken_at": result.broken_at, "detail": result.detail, "checked": result.checked},
     )
     raise typer.Exit(code=1)
+
+
+# --- taking the record somewhere else: the SIEM, the archive, a new key ------------------------
+def _as_jsonl(entry: LedgerEntry) -> str:
+    return entry.model_dump_json()
+
+
+def _as_csv(entry: LedgerEntry) -> str:
+    values = [
+        str(entry.seq),
+        entry.ts,
+        entry.call_id,
+        entry.principal,
+        entry.role,
+        f"{entry.upstream}:{entry.tool}",
+        entry.action_kind.value,
+        entry.verdict.value,
+        entry.reason.replace('"', "'"),
+        entry.result_summary.replace('"', "'"),
+        entry.entry_hash or "",
+    ]
+    return ",".join(f'"{v}"' for v in values)
+
+
+def _as_cef(entry: LedgerEntry) -> str:
+    """ArcSight CEF — the format most SIEMs ingest without a custom parser."""
+    severity = {"deny": 7, "pending": 4, "allow": 2}.get(entry.verdict.value, 3)
+    extension = " ".join(
+        f"{k}={v}"
+        for k, v in {
+            "rt": entry.ts,
+            "suser": entry.principal,
+            "sproc": f"{entry.upstream}:{entry.tool}",
+            "act": entry.verdict.value,
+            "cs1Label": "reason",
+            "cs1": entry.reason.replace("=", "-").replace("|", "/"),
+            "cs2Label": "callId",
+            "cs2": entry.call_id,
+            "cn1Label": "seq",
+            "cn1": entry.seq,
+        }.items()
+    )
+    return (
+        f"CEF:0|GateKeeperAI|gatekeeper|1|{entry.action_kind.value}.{entry.verdict.value}"
+        f"|{entry.upstream}:{entry.tool}|{severity}|{extension}"
+    )
+
+
+_FORMATTERS = {"jsonl": _as_jsonl, "csv": _as_csv, "cef": _as_cef}
+_CSV_HEADER = "seq,ts,call_id,principal,role,tool,action,verdict,reason,result,entry_hash"
+
+
+def _write_entries(entries: Iterable[LedgerEntry], fmt: str, out: Path | None) -> int:
+    """Stream entries in ``fmt`` to a file or stdout. Returns how many were written."""
+    formatter = _FORMATTERS[fmt]
+    handle = out.open("w", encoding="utf-8") if out else None
+    written = 0
+    try:
+        if fmt == "csv":
+            print(_CSV_HEADER, file=handle)
+        for entry in entries:
+            print(formatter(entry), file=handle)
+            written += 1
+    finally:
+        if handle is not None:
+            handle.close()
+    return written
+
+
+@app.command()
+def export(
+    since: str = typer.Option("", "--since", help="UTC date or timestamp, e.g. 2026-01-01."),
+    until: str = typer.Option("", "--until", help="Exclusive upper bound, same format."),
+    fmt: str = typer.Option("jsonl", "--format", help="jsonl | csv | cef"),
+    out: Path | None = typer.Option(None, "--out", help="Write here instead of stdout."),
+) -> None:
+    """Export the audit trail for your SIEM, an auditor, or a spreadsheet.
+
+    The ledger is the durable record; this is a copy of it in a shape something else can read.
+    Streamed in batches, so exporting a year costs bounded memory. Nothing is removed — see
+    `gatekeeper archive` for retention.
+    """
+    configure_logging(get_settings().log_level)
+    if fmt not in _FORMATTERS:
+        _console.print(f"[bold red][ERROR][/] unknown format {fmt!r} (jsonl | csv | cef)")
+        raise typer.Exit(code=2)
+    with _opened_ledger() as store:
+        written = _write_entries(
+            store.entries_between(since_ts=since or None, until_ts=until or None), fmt, out
+        )
+    if out:
+        _console.print(f"exported {written} entries to {out} ({fmt})")
+
+
+@app.command()
+def archive(
+    before: str = typer.Option(..., "--before", help="Archive entries older than this UTC date."),
+    out: Path = typer.Option(..., "--out", help="Where the archived entries are written."),
+    prune: bool = typer.Option(
+        False,
+        "--prune",
+        help="Also REMOVE them from the ledger, leaving a signed checkpoint in their place.",
+    ),
+    note: str = typer.Option("", "--note", help="Why, recorded in the checkpoint."),
+) -> None:
+    """Archive old entries, and optionally remove them under a signed retention checkpoint.
+
+    A hash chain proves nothing was removed; a retention policy exists to remove things. Rather
+    than pretend those do not conflict, a prune records where the cut was and what the chain's
+    state was at that point, and signs that statement with the ledger key. `verify` then resumes
+    from the checkpoint and reports it — so the removal is accountable, and removing records
+    WITHOUT such a signed account is still detected as tampering.
+
+    The archive file is always written first. A deletion with nowhere to read the records back
+    from is not retention.
+    """
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.archive")
+    with _opened_ledger() as store:
+        written = _write_entries(store.entries_before(before), "jsonl", out)
+        if written == 0:
+            _console.print(f"nothing older than {before}; no archive written")
+            raise typer.Exit(code=0)
+        _console.print(f"archived {written} entries to {out}")
+        if not prune:
+            _console.print("Nothing was removed. Re-run with --prune to apply retention.")
+            return
+        try:
+            checkpoint = store.prune_before(before, archive_path=str(out), note=note)
+        except ValueError as exc:
+            _console.print(f"[bold yellow]nothing pruned[/] {exc}")
+            raise typer.Exit(code=1) from exc
+        result = store.verify()
+
+    _console.print(
+        f"[bold]removed[/] {checkpoint.pruned_count} entries through seq "
+        f"{checkpoint.through_seq}, under a signed checkpoint"
+    )
+    _console.print(f"verify -> {'OK' if result.ok else 'FAILED'}: {escape(result.detail)}")
+    log.info(
+        "retention applied",
+        extra={
+            "through_seq": checkpoint.through_seq,
+            "pruned": checkpoint.pruned_count,
+            "archive": str(out),
+            "verify_ok": result.ok,
+        },
+    )
+
+
+@app.command(name="rotate-key")
+def rotate_key(
+    yes: bool = typer.Option(False, "--yes", help="Do it without asking."),
+) -> None:
+    """Rotate the ledger's chain key, keeping every existing record verifiable.
+
+    Generates a new key, moves the current one into GATEKEEPER_HMAC_KEY_PREVIOUS, and writes both
+    back to .env. New entries are signed with the new key; older ones keep the fingerprint of the
+    key that signed them, so one `verify` still walks the whole chain.
+
+    Keep the retired keys. Deleting one makes every record it signed unverifiable — which looks
+    exactly like tampering, and cannot be undone.
+    """
+    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    if not settings.hmac_key.strip():
+        _console.print("[bold red][ERROR][/] there is no key to rotate. Run `gatekeeper init`.")
+        raise typer.Exit(code=2)
+    if not yes and not typer.confirm("Rotate the ledger chain key now?"):
+        _console.print("nothing changed")
+        raise typer.Exit(code=1)
+
+    env_path = settings.project_root / ENV_FILE
+    existing = _read_env_file(env_path)
+    retired = [k for k in (existing.get("GATEKEEPER_HMAC_KEY_PREVIOUS", ""), "") if k]
+    previous = ",".join([settings.hmac_key, *retired])
+    _replace_env(env_path, {_ENV_HMAC: secrets.token_hex(32), _ENV_HMAC_PREVIOUS: previous})
+    get_settings.cache_clear()
+
+    with _opened_ledger() as store:
+        result = store.verify()
+    _console.print(f"[bold green]rotated[/] new chain key written to {env_path}")
+    _console.print(f"the retired key is kept in {_ENV_HMAC_PREVIOUS} so old records still verify")
+    _console.print(f"verify -> {'OK' if result.ok else 'FAILED'}: {escape(result.detail)}")
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command()

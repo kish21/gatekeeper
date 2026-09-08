@@ -18,7 +18,13 @@ from sqlalchemy import Engine, inspect
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.ledger.sql import SqlLedgerStore
-from gatekeeper.config.loader import ConfigError, Settings, boot, ledger_target
+from gatekeeper.config.loader import (
+    ConfigError,
+    Settings,
+    boot,
+    ledger_target,
+    previous_hmac_keys,
+)
 from gatekeeper.db.base import (
     backend_name,
     create_ledger_engine,
@@ -75,4 +81,4 @@ def open_ledger(
             f"Could not create or open the {backend_name(target)} audit ledger "
             f"({redact_url(target)}): {type(exc).__name__}: {exc}"
         ) from exc
-    return SqlLedgerStore(Session(engine), settings.hmac_key)
+    return SqlLedgerStore(Session(engine), settings.hmac_key, previous_hmac_keys(settings))

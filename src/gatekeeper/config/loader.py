@@ -57,6 +57,11 @@ class Settings(BaseSettings):
 
     # --- secrets -------------------------------------------------------------------------------
     hmac_key: str = Field(default="", description="Keyed-HMAC key for the audit hash-chain.")
+    hmac_key_previous: str = Field(
+        default="",
+        description="Comma-separated retired chain keys. Entries written before a rotation are "
+        "verified with the key that signed them, so rotating never orphans the old records.",
+    )
     agent_token: str = Field(
         default="",
         description="Bearer token the agent presents to the stdio gateway (-> a Principal).",
@@ -154,6 +159,11 @@ DEFAULT_POLICY_DIR = "./policies"
 
 #: Suffix of the committed demo tokens in ``config/identities.yaml``. They are public knowledge.
 PLACEHOLDER_TOKEN_SUFFIX = "-REPLACE-ME"  # noqa: S105 — a marker, not a credential
+
+
+def previous_hmac_keys(settings: Settings) -> list[str]:
+    """Retired chain keys, in the order they should be tried when verifying an older entry."""
+    return _split_csv(settings.hmac_key_previous)
 
 
 def ledger_path(config: dict[str, Any]) -> str:

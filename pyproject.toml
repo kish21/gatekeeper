@@ -77,6 +77,11 @@ ignore = ["S101"]                                   # allow assert in tests
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]
 
+# Typer declares a CLI by calling Option()/Argument() in the signature — that IS the framework's
+# interface, not the mutable-default bug B008 looks for.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
