@@ -1,12 +1,15 @@
-# GateKeeperAI gateway — cloud-neutral container (M3.3). Azure-first proof lives in
-# docs/deploy/azure-container-apps.md; the image itself runs anywhere.
+# GateKeeperAI gateway — cloud-neutral container. Azure Container Apps guide:
+# docs/deploy/azure-container-apps.md. The image itself runs anywhere.
 #
-# Posture (matches the ADRs):
-#   * ONE worker / ONE replica (ADR-007: ledger single-writer by construction).
-#   * Binds 0.0.0.0 INSIDE the container only via the explicit ADR-009 ack in
-#     deploy/container/platform.yaml — TLS terminates at the platform ingress, never in-process.
-#   * No secret in the image: GATEKEEPER_HMAC_KEY (+ any upstream {from_env} refs) arrive via
-#     the runtime environment; the ledger lives on a mounted volume (/data).
+# Posture:
+#   * ONE worker / ONE replica: the SQLite ledger has a single writer by construction.
+#   * Binds 0.0.0.0 INSIDE the container (the ENV block below is the explicit acknowledgement);
+#     TLS terminates at the platform ingress, never in-process.
+#   * No secret in the image: GATEKEEPER_HMAC_KEY (+ any upstream {from_env} refs) arrive via the
+#     runtime environment; the ledger lives on a mounted volume (/data).
+#   * No config baked in beyond the repo defaults: everything a deployment differs on is an
+#     environment variable (see config/platform.yaml for the full list), so a hosted gateway is
+#     configured at deploy time — never by rebuilding the image.
 
 # --- build stage: build the wheel once, keep build tooling out of the runtime image ---------
 FROM python:3.12-slim AS build
@@ -19,25 +22,28 @@ RUN pip install --no-cache-dir build && python -m build --wheel
 FROM python:3.12-slim
 WORKDIR /app
 
-# The wheel + the demo extra (the governed third-party demo server, same as CI exercises).
+# The wheel (migrations included) + the demo extra (the governed third-party demo server).
 COPY --from=build /build/dist/*.whl /tmp/
 RUN pip install --no-cache-dir /tmp/*.whl && \
     pip install --no-cache-dir "mcp-server-time>=2026.6.4" && \
     rm /tmp/*.whl
 
-# Migrations run from the source tree exactly like CI does (alembic.ini -> src/...).
-COPY alembic.ini ./alembic.ini
-COPY src/gatekeeper/db ./src/gatekeeper/db
-# Default deployment config: the repo config overlaid with the container platform.yaml
-# (http transport, 0.0.0.0 + ADR-009 ack, ledger on /data). Mount your own dir over /app/config
-# (or set GATEKEEPER_CONFIG_DIR) for a real deployment.
+# Repo defaults. Mount your own dir over /app/config (or set GATEKEEPER_CONFIG_DIR) to change
+# the governed servers, identities, or policy.
 COPY config ./config
 COPY policies ./policies
 COPY examples ./examples
-COPY deploy/container/platform.yaml ./config/platform.yaml
 COPY deploy/container/entrypoint.sh /entrypoint.sh
 
-# Non-root; /data is the ledger volume (Azure Files / any persistent mount).
+# Container runtime configuration — plain environment, overridable at `docker run` / deploy time.
+ENV GATEKEEPER_CONFIG_DIR=/app/config \
+    GATEKEEPER_TRANSPORT=http \
+    GATEKEEPER_HTTP_HOST=0.0.0.0 \
+    GATEKEEPER_HTTP_PORT=8765 \
+    GATEKEEPER_HTTP_ALLOW_NON_LOOPBACK=1 \
+    GATEKEEPER_LEDGER_PATH=/data/audit.db
+
+# Non-root; /data is the ledger volume (any persistent mount).
 RUN useradd --create-home --uid 10001 gatekeeper && \
     mkdir -p /data && chown -R gatekeeper:gatekeeper /app /data && \
     chmod +x /entrypoint.sh

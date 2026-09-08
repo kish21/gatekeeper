@@ -91,13 +91,13 @@ Zero code.
 GateKeeperAI runs as a small program **on the same machine as the AI assistant** — quietly, in the
 middle. A customer sets it up once:
 
-1. **Install** GateKeeperAI on the machine where their AI assistant runs.
-2. **Edit the settings files** — list the tools/servers they want governed, set the badges
-   (who/which role), and keep or adjust the rulebook.
-3. **Add two secrets** to a private `.env` file: a key that makes the logbook tamper-proof, and the
-   badge token the AI will carry.
-4. **Run one setup command** (creates the logbook), then **start GateKeeperAI**.
-5. **Point the AI assistant at GateKeeperAI** instead of directly at the tools.
+1. **Install** GateKeeperAI on the machine where their AI assistant runs (`make install`).
+2. **Run `gatekeeper init`** — it creates the logbook and writes the two secrets (the logbook's
+   tamper-proofing key and the badge the AI will carry) into a private `.env` file.
+3. **Run `gatekeeper doctor`** — it checks everything and prints the exact settings block to paste
+   into the AI assistant, so the assistant launches GateKeeperAI itself.
+4. **Edit the settings files** when they want to — list more tools/servers, change the badges, or
+   adjust the rulebook. `doctor` tells them if something no longer lines up.
 
 From that moment on, **every action the AI takes is checked and recorded** — with no change to the
 AI assistant itself, and no change to the tools.
@@ -189,5 +189,5 @@ Be precise with customers — don't oversell:
 ---
 
 *The deepest "why" behind these choices — the vision, scope, and the architecture decisions — lives
-in [`../PRODUCT.md`](../PRODUCT.md). This page is the plain-English version for a non-technical
+in [`internal/PRODUCT.md`](internal/PRODUCT.md). This page is the plain-English version for a non-technical
 audience.*

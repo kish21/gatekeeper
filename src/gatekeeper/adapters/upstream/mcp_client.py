@@ -41,6 +41,50 @@ _SUMMARY_MAX = 200
 #: for an upstream's own credentials (e.g. a GitHub server's token) too.
 _ENV_REF_KEY = "from_env"
 
+#: Environment variables a subprocess needs in order to start at all. Everything else — API keys,
+#: cloud credentials, the gateway's own secrets — stays with the gateway (least privilege).
+_SPAWN_ENV_VARS = frozenset(
+    {
+        # POSIX
+        "PATH",
+        "HOME",
+        "SHELL",
+        "TERM",
+        "USER",
+        "LOGNAME",
+        "TZ",
+        "LANG",
+        "LANGUAGE",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        # Python runtime hints (never secrets)
+        "PYTHONIOENCODING",
+        "PYTHONUTF8",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        # Windows: without these a child interpreter fails to spawn under an MCP host
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+    }
+)
+
+
+def _is_spawn_var(name: str) -> bool:
+    upper = name.upper()
+    return upper in _SPAWN_ENV_VARS or upper.startswith("LC_")
+
 
 def _resolve_env_value(upstream: str, key: str, value: object, source: Mapping[str, str]) -> str:
     """Resolve one upstream env entry to its final string value.
@@ -136,18 +180,16 @@ class UpstreamSpec:
         )
 
     def _child_env(self) -> dict[str, str]:
-        """Environment for the upstream subprocess.
+        """Environment for the upstream subprocess: enough to *start*, nothing to *steal*.
 
-        The MCP SDK's default stdio environment is a scrubbed allowlist that, under an MCP host on
-        Windows, can omit vars a child interpreter needs to even start (e.g. ``SystemRoot``) — so a
-        config-declared ``python -m ...`` upstream fails to spawn and its tools silently never
-        appear (``upstream unavailable; skipping``). Inherit the gateway's own process environment
-        so upstreams launch reliably regardless of host, then overlay the upstream's configured env
-        (incl. resolved ``{from_env}`` secrets). The gateway's OWN secrets (``GATEKEEPER_*`` — the
-        ledger HMAC key, the agent token) are stripped first, so a governed upstream never inherits
-        them (least privilege; only its own declared credentials reach it).
+        A governed tool server gets only what a process needs to launch (PATH, HOME, locale, the
+        temp dir, and on Windows the system vars without which a child interpreter cannot even
+        start) plus the env declared for it in ``config/upstreams.yaml`` (including resolved
+        ``{from_env}`` secrets). It never inherits the gateway's own secrets, and it never inherits
+        unrelated credentials that happen to be in the gateway's environment (an API key for one
+        service must not leak to every server the gateway launches).
         """
-        env = {k: v for k, v in os.environ.items() if not k.startswith("GATEKEEPER_")}
+        env = {k: v for k, v in os.environ.items() if _is_spawn_var(k)}
         if self.env:
             env.update(self.env)
         return env
@@ -292,6 +334,7 @@ class McpUpstreamClient:
                 "upstream forward failed",
                 extra={"call_id": call.call_id, "upstream": call.upstream, "tool": call.tool},
             )
+            await self._evict(call.upstream)
             return self._failure(call, f"{type(exc).__name__}: {exc}")
         return ToolResult(
             call_id=call.call_id, ok=not raw.isError, summary=_summarize(raw), raw=raw
@@ -302,7 +345,34 @@ class McpUpstreamClient:
         raw = types.CallToolResult(
             content=[types.TextContent(type="text", text=reason)], isError=True
         )
-        return ToolResult(call_id=call.call_id, ok=False, summary=f"error: {reason}", raw=raw)
+        # The ledger summary is capped like every other summary: an exception echoing a path or
+        # an argument must not land in the audit trail verbatim and unbounded.
+        return ToolResult(
+            call_id=call.call_id, ok=False, summary=f"error: {reason[:_SUMMARY_MAX]}", raw=raw
+        )
+
+    async def _evict(self, name: str) -> None:
+        """Drop a session that just failed so the NEXT call relaunches the upstream.
+
+        A forward that raised (timeout, closed pipe, protocol error) means the session is in an
+        unknown state — an upstream that crashed would otherwise leave every later call waiting
+        out the full timeout, forever. Tearing it down costs one relaunch; keeping it costs the
+        upstream for the rest of the gateway's life.
+        """
+        runner = self._runners.pop(name, None)
+        if runner is None:
+            return
+        runner.stop.set()
+        if runner.task is not None:
+            try:
+                await asyncio.wait_for(runner.task, 5)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception as exc:  # noqa: BLE001 — teardown of a broken session may itself fail
+                _log.debug("error while dropping upstream session", extra={"error": str(exc)})
+        _log.warning(
+            "upstream session dropped after a failure; will relaunch", extra={"upstream": name}
+        )
 
     async def aclose(self) -> None:
         """Close every open upstream session (called on gateway shutdown).

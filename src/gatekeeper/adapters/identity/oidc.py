@@ -41,6 +41,8 @@ _DEFAULT_GROUPS_CLAIM = "groups"
 #: How long fetched JWKS keys are cached (seconds). A refresh is one blocking HTTP fetch — rare
 #: (key rollover), bounded by the timeout below, and recorded here as a deliberate trade.
 _DEFAULT_JWKS_LIFESPAN_S = 900.0
+#: Clock skew tolerated on exp/nbf/iat. Zero turns every few seconds of drift into a deny.
+_DEFAULT_LEEWAY_S = 30.0
 _DEFAULT_HTTP_TIMEOUT_S = 10.0
 #: OIDC discovery path appended to the issuer when no explicit jwks_url is configured.
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
@@ -60,7 +62,7 @@ class OidcIdentityResolver:
         principal_claim: str = _DEFAULT_PRINCIPAL_CLAIM,
         groups_claim: str = _DEFAULT_GROUPS_CLAIM,
         tenant: str = "default",
-        leeway_s: float = 0.0,
+        leeway_s: float = _DEFAULT_LEEWAY_S,
     ) -> None:
         self._issuer = issuer
         self._audience = audience
@@ -91,8 +93,10 @@ class OidcIdentityResolver:
                 "to start half-configured (fail-loud) — every field is required so no caller "
                 "can authenticate by accident."
             )
-        issuer = str(oidc["issuer"]).rstrip("/")
-        jwks_url = str(oidc.get("jwks_url", "")).strip() or _discover_jwks_url(issuer)
+        # The issuer is compared VERBATIM against the token's ``iss`` (RFC 7519 string match);
+        # Auth0/Keycloak issue with a trailing slash, Entra without — never normalise it away.
+        issuer = str(oidc["issuer"]).strip()
+        jwks_url = str(oidc.get("jwks_url", "")).strip() or _discover_jwks_url(issuer.rstrip("/"))
         jwks_client = jwt.PyJWKClient(
             jwks_url,
             cache_keys=True,
@@ -108,7 +112,7 @@ class OidcIdentityResolver:
             principal_claim=str(oidc.get("principal_claim", _DEFAULT_PRINCIPAL_CLAIM)),
             groups_claim=str(oidc.get("groups_claim", _DEFAULT_GROUPS_CLAIM)),
             tenant=str(oidc.get("tenant", "default")),
-            leeway_s=float(oidc.get("leeway_s", 0.0)),
+            leeway_s=float(oidc.get("leeway_s", _DEFAULT_LEEWAY_S)),
         )
 
     # --- the port -----------------------------------------------------------------------------

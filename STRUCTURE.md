@@ -1,64 +1,57 @@
 # STRUCTURE.md — GateKeeperAI codebase map
 
-A clean **ports & adapters (hexagonal)** layout, `src`-layout so the installed package equals the tested
-package. The rule: **dependencies point inward** (transport → gateway → domain), and the only layer
-allowed to import an external SDK is `adapters/`. One folder = one concern; no god-files.
+A **ports & adapters** layout in `src`-layout form, so the installed package is the tested package.
+Dependencies point inward (transport → gateway → domain); only `adapters/` may import an external SDK.
 
 ```
-GateKeeperAI/
-├── PRODUCT.md              # the product spine (vision→scope→plan→architecture/ADRs)
-├── STRUCTURE.md            # this file — the codebase map
-├── README.md  SECURITY.md  CHANGELOG.md  CONTRIBUTING.md  LICENSE
-├── pyproject.toml          # package metadata + deps (prod) + [dependency-groups] dev + tool config
-├── Makefile                # run targets: install / serve / verify / tail / test / lint / check / migrate / seed
-├── .env.example            # secret NAMES only (copy → .env). .env is git-ignored.
-├── .gitignore  .gitleaks.toml  .pre-commit-config.yaml   # hygiene + secret-scan
+gatekeeper/
+├── README.md  STRUCTURE.md  SECURITY.md  CHANGELOG.md  CONTRIBUTING.md  LICENSE
+├── pyproject.toml          # package metadata + deps; dev tools under [dependency-groups]
+├── Makefile                # install / demo / init / doctor / serve / tail / verify / test / lint
+├── Dockerfile              # cloud-neutral image; configured by environment, no baked overlay
+├── .env.example            # the variable NAMES (secrets + overrides). `gatekeeper init` writes .env
 │
-├── config/                 # ── DEPLOYMENT CONFIG (data, not code) — the no-hardcoding surface ──
-│   ├── platform.yaml       #   engine/technical knobs: transport, adapter selection, resilience, log
-│   ├── product.yaml        #   product/business knobs: fail-closed default, write-detection, M2 risk/approval
-│   ├── upstreams.yaml      #   the registry — add ANY MCP server here to govern it (zero code)
-│   └── identities.yaml     #   static token→principal→role map (M1 dev stub; FAKE tokens only)
-├── policies/
-│   └── gatekeeper.cedar    #   policy-as-code (RBAC allow/deny per role × tool) — analyzable (ADR-002)
+├── config/                 # ── what you edit (data, not code) ──
+│   ├── upstreams.yaml      #   the governed servers: how to launch each, which tools are writes
+│   ├── identities.yaml     #   demo tokens -> principal -> role (refused on a public bind)
+│   ├── platform.yaml       #   how the gateway runs; every knob has a GATEKEEPER_* env var
+│   └── product.yaml        #   how a tool name is guessed to be a write when unannotated
+├── policies/gatekeeper.cedar   # the rulebook: role x read/write -> allow; deny by default
 │
-├── src/gatekeeper/         # ── THE PACKAGE (code) ──
-│   ├── transport/          #   speak MCP to the agent (stdio/HTTP). Protocol I/O only, no logic.
-│   ├── gateway/            #   the PEP: pipeline identity→policy→[risk→approval]→audit→forward (fail-closed)
-│   ├── domain/             #   pure domain logic + value objects. No I/O, no SDKs. Fully unit-testable.
-│   ├── ports/              #   adapter INTERFACES (Protocols): Identity/Policy/Ledger/Upstream/LLM
-│   ├── adapters/           #   concrete, config-selected impls of ports — ONLY layer that imports an SDK
-│   │   ├── identity/       #     static_token (M1) | oidc (deferred)
+├── src/gatekeeper/         # ── the package ──
+│   ├── cli/                #   `gatekeeper` init · doctor · serve · tail · verify · show · stats
+│   ├── transport/          #   MCP bindings: stdio (one identity per process) and HTTP (per-request)
+│   ├── gateway/            #   the pipeline: identity -> classify -> policy -> audit -> forward -> audit
+│   ├── domain/             #   pure logic: read/write classification, error types
+│   ├── ports/              #   the interfaces: IdentityResolver, PolicyEngine, LedgerStore, UpstreamClient
+│   ├── adapters/           #   the implementations (the only SDK imports)
+│   │   ├── identity/       #     static_token · oidc
 │   │   ├── policy/         #     cedar
-│   │   ├── ledger/         #     sqlite + hashchain (keyed-HMAC chain)
-│   │   ├── upstream/       #     mcp_client (MCP client → real server)
-│   │   └── llm/            #     claude + stub (M2)
-│   ├── schemas/            #   typed DTOs crossing boundaries (ToolCall, ToolResult, LedgerEntry, Decision)
-│   ├── audit/              #   tamper-evident ledger service + `verify` (the wedge)
-│   ├── approval/           #   M2 human-in-the-loop write-approval gate
-│   ├── ai/                 #   M2 LLM risk classification (uses the llm port; writes-only)
-│   ├── prompts/            #   versioned AI prompts (YAML) — never inline. risk_classifier.yaml
-│   ├── infra/              #   cross-cutting: structured JSON logging, resilience (timeout/retry/breaker)
-│   ├── config/             #   typed config LOADER (loader.py) — reads .env + config/*.yaml
-│   ├── db/                 #   persistence wiring + Alembic migrations (schema via migrations only)
-│   └── cli/                #   operator CLI (Typer): serve/tail/verify/show/seed-demo  → `gatekeeper`
+│   │   ├── ledger/         #     sqlite (WAL, single writer) + the keyed-HMAC hash chain + auto-migrate
+│   │   └── upstream/       #     mcp_client: launches governed servers with a minimal environment
+│   ├── schemas/            #   typed DTOs: ToolCall, ToolResult, Principal, Decision, LedgerEntry
+│   ├── config/             #   loader: .env + YAML + GATEKEEPER_* overrides, project-root paths
+│   ├── db/                 #   engine setup + Alembic migrations (shipped inside the package)
+│   └── infra/              #   JSON logging, metrics, alerts
 │
-├── examples/               # governed targets for demos/tests (e.g. demo_file_server.py with read+write)
-├── tests/                  # unit/ (mocked) · integration/ (real contracts) · adversarial/ (tamper/bypass/injection)
-└── docs/                   # design/ (big-task design docs) · features/ (one per built feature)
+├── deploy/container/entrypoint.sh   # `exec gatekeeper serve`
+├── scripts/                # demo.py · demo_enterprise.py · deploy_azure.sh · probe_hosted.py · windows/*.bat
+├── examples/               # demo_file_server.py — the governed demo target (read + write tools)
+├── tests/                  # unit · integration · adversarial · golden (RBAC dataset) · eval (benchmarks)
+└── docs/                   # getting-started · deploy · features · runbooks · glossary · internal/
 ```
 
-## Why this shape (the two decisions a reviewer will ask about)
+## Two decisions a reviewer will ask about
 
-- **`src`-layout, package `gatekeeper`.** It's a pip-installable open-core tool, so the package is
-  isolated under `src/` — you test the *installed* artifact, not loose top-level modules. (This is the
-  modern Python-packaging default and the reason for `[tool.hatch.build.targets.wheel] packages`.)
-- **`config/` (YAML data at root) vs `src/gatekeeper/config/` (the loader code).** Deliberate split:
-  *deployment config is data a security engineer edits* (which servers, which roles, which thresholds)
-  and lives at the root where it's obvious; the *typed loader that reads it* is code and lives in the
-  package. Secrets are in neither — only in `.env`.
+- **`src`-layout, package `gatekeeper`.** It is a pip-installable tool, so the package lives under
+  `src/` and tests run against the installed artifact. Migrations ship inside the package, which is
+  why a fresh checkout or container needs no separate migrate step.
+- **`config/` at the root vs `src/gatekeeper/config/`.** Deployment config is data a security
+  engineer edits, so it sits where it is obvious; the typed loader that reads it is code and lives in
+  the package. Secrets are in neither, only in `.env` or the deployment environment.
 
-## The no-hardcoding chain
-`.env` (secrets) → `config/platform.yaml` + `config/product.yaml` (knobs) → `src/gatekeeper/config/loader.py`
-(typed load) → adapters selected by `adapters.*` keys. Change a server, a role, a threshold, or even the
-policy/ledger/LLM implementation **without touching business logic**.
+## Where a value comes from
+
+Process environment → `.env` in the project root → `config/*.yaml` → built-in defaults. Relative
+paths resolve against the project root (the parent of the config folder), so the gateway behaves the
+same whether you run it from a shell or an MCP host launches it from elsewhere.

@@ -1,3 +1,9 @@
+> **Historical record.** This is the test plan and evidence from the first live Azure run
+> (2026-08-24). The deploy flow has since changed: the public hostname is trusted automatically
+> (Check 3's rebuild no longer exists), the script issues per-deployment tokens, and the ledger
+> storage default is the container disk. The current guide is
+> [docs/deploy/azure-container-apps.md](../deploy/azure-container-apps.md).
+
 # Runbook — verify a HOSTED GateKeeper deployment (the M3.3 exit proof)
 
 > Audience: **anyone** — no GateKeeper or Azure knowledge assumed. Outcome: evidence that a real
@@ -93,7 +99,7 @@ The gateway refuses requests whose `Host` header it does not recognise — a del
 defence that **fails closed**. Your public FQDN did not exist when the image was built, so it is not
 on the list yet, and `/mcp` will answer `421` until it is.
 
-Edit [deploy/container/platform.yaml](../../deploy/container/platform.yaml) and put your FQDN in:
+Edit `deploy/container/platform.yaml` (removed since) and put your FQDN in:
 
 ```yaml
 transport:
@@ -266,7 +272,7 @@ Honesty matters more than a full scorecard. Passing every check above still leav
   real tenant — a separate exercise. The probe accepts `--operator-token` / `--readonly-token`, so
   the identical checks re-run against real JWTs once OIDC is configured.
 - **A credentialed third-party connector.** See the
-  [connector-onboarding runbook](connector-onboarding.md).
+  [connector-onboarding runbook](../runbooks/connector-onboarding.md).
 
 - **A durable audit trail on Azure Files (SMB).** Measured and **failed** — see Part C's note.
 

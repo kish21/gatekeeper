@@ -1,21 +1,50 @@
-"""Open a configured ``SqliteLedgerStore``. Wiring only (keeps DB plumbing out of the CLI)."""
+"""Open a configured ``SqliteLedgerStore``. Wiring only (keeps DB plumbing out of the CLI).
+
+A ledger that does not exist yet is created here by running the migrations, so ``serve``,
+``tail`` and ``verify`` all work on a fresh checkout without a separate migrate step. The
+migrations remain the single source of the schema (``gatekeeper.db.migrations``); this module only
+decides *when* to run them.
+"""
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, inspect
+from alembic import command
+from alembic.config import Config as AlembicConfig
+from sqlalchemy import Engine, inspect
 from sqlalchemy.orm import Session
 
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
 from gatekeeper.config.loader import ConfigError, Settings, boot, ledger_path
-from gatekeeper.db.base import database_url, ensure_parent_dir
+from gatekeeper.db.base import create_ledger_engine, database_url, ensure_parent_dir
+
+#: Where the migration scripts live, inside the installed package (no repo checkout needed).
+MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "db" / "migrations"
+
+
+def migrate(ledger_db_path: str) -> None:
+    """Bring the ledger schema at ``ledger_db_path`` to the latest migration (idempotent)."""
+    ensure_parent_dir(ledger_db_path)
+    # Alembic narrates every step at INFO; a first run should not read like a stack of logs.
+    logging.getLogger("alembic").setLevel(logging.WARNING)
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.set_main_option("sqlalchemy.url", database_url(ledger_db_path))
+    command.upgrade(cfg, "head")
+
+
+def _ensure_schema(engine: Engine, path: str) -> None:
+    if not inspect(engine).has_table("ledger_entry"):
+        migrate(path)
 
 
 def open_ledger(
     settings: Settings | None = None, config: dict[str, Any] | None = None
 ) -> SqliteLedgerStore:
-    """Build the ledger store from config. Fail-closed (HMAC key) + fail-loud (table must exist).
+    """Build the ledger store from config. Fail-closed (HMAC key); creates the schema if absent.
 
     Pass an already-booted ``(settings, config)`` to avoid re-loading config + re-running the
     security guard (the gateway composition root does this); omit them to boot standalone (CLI).
@@ -26,17 +55,16 @@ def open_ledger(
     try:
         ensure_parent_dir(path)
     except OSError as exc:
-        # Almost always a wrong working directory: the relative ledger path resolved under a
-        # protected dir (e.g. an MCP host launched the gateway without `cwd`). Turn the raw OSError
-        # into a clear, caught ConfigError with the fix, instead of an opaque traceback.
         raise ConfigError(
-            f"Cannot create the audit-ledger directory for {path!r} ({exc}). The gateway's working "
-            "directory is likely wrong — set 'cwd' to the GateKeeperAI project folder in your MCP "
-            "host config (e.g. Claude Desktop), then retry."
+            f"Cannot create the audit-ledger directory for {path!r} ({exc}). Set "
+            "GATEKEEPER_CONFIG_DIR to the absolute path of the project's config/ folder in your "
+            "MCP host config, or GATEKEEPER_LEDGER_PATH to a writable location, then retry."
         ) from exc
-    engine = create_engine(database_url(path))
-    if not inspect(engine).has_table("ledger_entry"):
+    engine = create_ledger_engine(path)
+    try:
+        _ensure_schema(engine, path)
+    except Exception as exc:  # noqa: BLE001 — a schema failure must be a clear boot error
         raise ConfigError(
-            "Ledger table not found. Run `make migrate` (alembic upgrade head) first."
-        )
+            f"Could not create or open the audit ledger at {path!r}: {type(exc).__name__}: {exc}"
+        ) from exc
     return SqliteLedgerStore(Session(engine), settings.hmac_key)

@@ -6,7 +6,7 @@ REM  or changed on your machine; it cleans up after itself.
 REM ===================================================================
 
 REM Move into this script's own folder so the demo finds its config.
-cd /d "%~dp0"
+cd /d "%~dp0\..\.."
 
 REM Run the demo using the Python that lives inside this project (.venv).
 if exist ".venv\Scripts\python.exe" (

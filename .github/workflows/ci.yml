@@ -49,10 +49,11 @@ jobs:
       - uses: actions/checkout@v6
       - name: Build the image
         run: docker build -t gatekeeper:ci .
-      - name: Boot + liveness smoke (migrate -> serve -> /healthz)
+      - name: Boot + liveness smoke (serve auto-migrates -> /healthz)
         run: |
           docker run -d --name gk -p 8765:8765 \
-            -e GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" gatekeeper:ci
+            -e GATEKEEPER_HMAC_KEY="$(openssl rand -hex 32)" \
+            -e GATEKEEPER_ALLOW_DEMO_TOKENS=1 gatekeeper:ci   # smoke only: demo tokens
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8765/healthz; then ok=1; break; fi; sleep 1;
           done

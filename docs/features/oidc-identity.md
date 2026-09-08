@@ -24,6 +24,12 @@ identity:
       <group-object-id>: readonly   # unmapped groups -> DENY
 ```
 
+The same settings can be given as environment variables, which is how a hosted deployment switches
+without a rebuild: `GATEKEEPER_IDENTITY=oidc`, `GATEKEEPER_OIDC_ISSUER`, `GATEKEEPER_OIDC_AUDIENCE`,
+`GATEKEEPER_OIDC_GROUP_ROLE_MAP="<group-id>=operator,<group-id>=readonly"` (plus optional
+`_JWKS_URL`, `_PRINCIPAL_CLAIM`, `_GROUPS_CLAIM`). The issuer is compared verbatim against the
+token's `iss` (keep a trailing slash if your IdP issues one); clock skew of 30 s is tolerated.
+
 **Stack (mini-ADR-010, benchmarked 2026):** PyJWT + `PyJWKClient` (cached keys), not MSAL — the
 gateway is a resource server that *validates* tokens; MSAL is a token-*acquisition* library.
 PyJWT+JWKS is the standard IdP-agnostic pattern (Entra/Keycloak/Auth0/Okta all serve JWKS).

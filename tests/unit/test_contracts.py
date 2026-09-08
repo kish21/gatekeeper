@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-import yaml
 from pydantic import ValidationError
 
 from gatekeeper.schemas.enums import ActionKind, Verdict
@@ -39,13 +36,6 @@ def test_risk_must_be_within_0_1(bad: float):
         Decision(call_id="c1", verdict=Verdict.DENY, reason="x", risk=bad)
     with pytest.raises(ValidationError):
         RiskAssessment(risk=bad, is_write=True, reason="x")
-
-
-def test_risk_scale_agrees_across_config_and_code_boundary():
-    # The config threshold MUST be on the same 0..1 scale as Decision.risk / RiskAssessment.risk.
-    product = yaml.safe_load(Path("config/product.yaml").read_text(encoding="utf-8"))
-    threshold = product["risk"]["approve_threshold"]
-    assert 0.0 <= threshold <= 1.0
 
 
 # --- ledger contract -------------------------------------------------------

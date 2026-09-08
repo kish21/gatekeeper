@@ -64,7 +64,7 @@ class RecordingLedger:
     def get(self, call_id: str) -> LedgerEntry | None:
         raise NotImplementedError
 
-    def verify(self) -> VerifyResult:
+    def verify(self, *, expected_head: str | None = None) -> VerifyResult:
         raise NotImplementedError
 
 

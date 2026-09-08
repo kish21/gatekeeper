@@ -79,7 +79,7 @@ flowchart LR
   - `tests/integration/test_proxy.py::test_one_bad_upstream_does_not_take_down_the_gateway` — the
     resilience fix.
 - **Static / reviews:** ruff + format + mypy (strict) clean (49 source files); `/code-review` and
-  `/security-review` recorded in `PRODUCT.md#Build log`.
+  `/security-review` recorded in `../internal/PRODUCT.md#Build log`.
 
 ## Known limitations (honest)
 - **stdio transport only this slice.** An upstream declaring `transport: http` raises a clear

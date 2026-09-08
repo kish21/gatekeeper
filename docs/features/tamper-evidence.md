@@ -66,7 +66,7 @@ flowchart LR
 ## Known limitations (honest)
 - **`show`/`get(call_id)` is not tenant-scoped** — consistent with `tail` (both are single-tenant M1 operator
   tools; the operator already has full file access to the ledger). `/security-review` flagged this as the
-  pre-existing, documented limitation tied to the **deferred multi-tenant trigger** (PRODUCT.md#Scope), not a
+  pre-existing, documented limitation tied to the **deferred multi-tenant trigger** (../internal/PRODUCT.md#Scope), not a
   new exposure. When multi-tenant lands, tenant-scope `get()`, `read()`, and `show` together.
 - **Tail-truncation** (deleting the newest N entries) is undetectable by a bare chain — mitigated by `verify`
   emitting the head hash for out-of-band pinning; full anchoring deferred. (See [`ledger.md`](ledger.md).)

@@ -9,7 +9,7 @@ help: ## Show this help
 
 .PHONY: install
 install: ## Install deps (prod+dev) and git hooks
-	uv sync --all-extras --group dev || pip install -e ".[ai]" && pip install pre-commit pytest ruff mypy
+	uv sync --all-extras --group dev || (pip install -e ".[demo]" && pip install pytest pytest-asyncio pytest-timeout ruff mypy types-PyYAML pre-commit)
 	pre-commit install
 
 .PHONY: demo
@@ -19,6 +19,14 @@ demo: ## Play the 5-beat governance story end-to-end (no setup; hermetic, throwa
 .PHONY: demo-enterprise
 demo-enterprise: ## Play the ENTERPRISE story: governed over HTTP with real-login (OIDC), hermetic
 	$(PY) -m scripts.demo_enterprise
+
+.PHONY: init
+init: ## One-time setup: secrets into .env, ledger created, demo files seeded
+	$(PY) -m gatekeeper.cli.app init
+
+.PHONY: doctor
+doctor: ## Check everything and print the MCP host config to paste
+	$(PY) -m gatekeeper.cli.app doctor
 
 .PHONY: serve
 serve: ## Run the gateway (MCP transport, from config/)
@@ -30,7 +38,7 @@ verify: ## Verify the audit ledger integrity (hash-chain)
 
 .PHONY: tail
 tail: ## Tail the audit ledger
-	$(PY) -m gatekeeper.cli.app tail
+	$(PY) -m gatekeeper.cli.app tail --with-id
 
 .PHONY: test
 test: ## Run the test suite
@@ -44,9 +52,5 @@ lint: ## Lint + format-check + types
 check: lint test ## Lint + tests (CI parity)
 
 .PHONY: migrate
-migrate: ## Apply DB migrations (Alembic)
+migrate: ## Apply DB migrations by hand (serve/init already do this on boot)
 	alembic upgrade head
-
-.PHONY: seed
-seed: ## Seed example config (upstreams, identities, policy) for a local demo
-	$(PY) -m gatekeeper.cli.app seed-demo

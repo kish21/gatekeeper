@@ -21,12 +21,14 @@ def _raise_permission_error(_path: str) -> None:
     raise PermissionError("[WinError 5] Access is denied: '.gatekeeper'")
 
 
-def test_open_ledger_maps_unwritable_dir_to_configerror_with_cwd_hint(monkeypatch: Any) -> None:
+def test_open_ledger_maps_unwritable_dir_to_configerror_with_config_dir_hint(
+    monkeypatch: Any,
+) -> None:
     monkeypatch.setattr(factory, "ensure_parent_dir", _raise_permission_error)
     settings = Settings(hmac_key="k" * 64)
     config: dict[str, Any] = {"platform": {"ledger": {"path": "./.gatekeeper/audit.db"}}}
 
-    with pytest.raises(ConfigError, match="working directory"):
+    with pytest.raises(ConfigError, match="GATEKEEPER_CONFIG_DIR"):
         factory.open_ledger(settings, config)
 
 
@@ -46,3 +48,27 @@ def test_open_ledger_opens_an_existing_ledger(tmp_path: Path) -> None:
         assert store.verify().ok  # empty chain verifies; the store is usable
     finally:
         store.close()
+
+
+def test_open_ledger_creates_the_schema_when_missing(tmp_path: Path) -> None:
+    # A fresh checkout has no ledger yet; opening it must migrate, not demand a separate step.
+    db = tmp_path / "fresh" / "audit.db"
+    settings = Settings(hmac_key="k" * 64)
+    config: dict[str, Any] = {"platform": {"ledger": {"path": str(db)}}}
+
+    store = factory.open_ledger(settings, config)
+    try:
+        assert db.is_file()
+        assert store.verify().ok
+    finally:
+        store.close()
+    # And the migration is the schema's single source: alembic knows the DB is at head.
+    import sqlalchemy as sa
+
+    versions = (
+        sa.create_engine(f"sqlite:///{db}")
+        .connect()
+        .execute(sa.text("select version_num from alembic_version"))
+        .all()
+    )
+    assert versions == [("0001_create_ledger",)]

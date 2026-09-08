@@ -1,16 +1,22 @@
-"""Operator CLI (Typer) — the M1.4 surface.
+"""Operator CLI (Typer).
 
-gatekeeper health    # walking-skeleton health path: boot through the guard, show resolved config
-gatekeeper serve     # run the governed gateway (MCP transport)        [/build]
-gatekeeper tail      # tail the audit ledger                           [/build]
-gatekeeper verify    # prove the hash-chained ledger is intact         [/build]
-gatekeeper show ID   # show the decision recorded for one call         [/build]
-gatekeeper seed-demo # prepare the local demo + print a run recipe     [/build]
+gatekeeper init      # one-time setup: secrets into .env, ledger created, demo files seeded
+gatekeeper doctor    # check everything and print the MCP host config to paste
+gatekeeper serve     # run the governed gateway (MCP transport)
+gatekeeper tail      # tail the audit ledger
+gatekeeper verify    # prove the hash-chained ledger is intact
+gatekeeper show ID   # show the decision recorded for one call
+gatekeeper stats     # allow/deny counts from the ledger
 """
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
+import secrets
+import shutil
+import sys
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,7 +30,17 @@ from rich.table import Table
 
 from gatekeeper.adapters.ledger.factory import open_ledger
 from gatekeeper.adapters.ledger.sqlite import SqliteLedgerStore
-from gatekeeper.config.loader import ConfigError, boot, get_settings, ledger_path, load_config
+from gatekeeper.config.loader import (
+    ENV_FILE,
+    ConfigError,
+    Settings,
+    boot,
+    get_settings,
+    ledger_path,
+    load_config,
+    policy_dir,
+    validate_security,
+)
 from gatekeeper.infra.logging import configure_logging, get_logger
 from gatekeeper.schemas.enums import Verdict
 
@@ -36,7 +52,7 @@ _console = Console()
 #: it corrupts the protocol (an MCP host reports "not valid JSON"), so failures must use stderr.
 _err_console = Console(stderr=True)
 
-# --- seed-demo constants ---------------------------------------------------
+# --- demo sandbox constants --------------------------------------------------
 #: Env var + default naming the demo_file_server sandbox. Mirrors examples/demo_file_server.py (the
 #: governed target) so the seeded dir is exactly the one that server reads/writes.
 _DEMO_SANDBOX_ENV = "DEMO_FILE_ROOT"
@@ -46,6 +62,10 @@ _DEMO_SAMPLE_TEXT = (
     "Hello from GateKeeperAI. This file is served by the governed demo_file_server, "
     "so `read_file welcome.txt` works the moment the gateway is up.\n"
 )
+
+#: Env keys `init` fills in when they are missing or empty (never overwriting a set value).
+_ENV_HMAC = "GATEKEEPER_HMAC_KEY"
+_ENV_AGENT_TOKEN = "GATEKEEPER_AGENT_TOKEN"  # noqa: S105 — a variable NAME, not a value
 
 
 @contextmanager
@@ -62,58 +82,287 @@ def _opened_ledger() -> Iterator[SqliteLedgerStore]:
         store.close()
 
 
+# --- init -------------------------------------------------------------------------------------
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _upsert_env(path: Path, updates: dict[str, str]) -> list[str]:
+    """Set each key in ``updates`` in the env file, replacing an empty value in place and
+    appending a missing key. A key that already has a value is left alone. Returns keys written."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    written: list[str] = []
+    for key, value in updates.items():
+        replaced = False
+        for i, line in enumerate(lines):
+            if line.split("=", 1)[0].strip() == key:
+                current = line.split("=", 1)[1].strip() if "=" in line else ""
+                if current:
+                    replaced = True  # keep the user's value
+                    break
+                lines[i] = f"{key}={value}"
+                replaced = True
+                written.append(key)
+                break
+        if not replaced:
+            lines.append(f"{key}={value}")
+            written.append(key)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return written
+
+
+def _first_token(identities: list[dict[str, Any]], role: str) -> str:
+    for ident in identities:
+        if str(ident.get("role", "")) == role and ident.get("token"):
+            return str(ident["token"])
+    return ""
+
+
+def _seed_demo_sandbox(root_dir: Path) -> Path:
+    """Create the demo sandbox + a sample file (idempotent); return the resolved path."""
+    configured = os.environ.get(_DEMO_SANDBOX_ENV)
+    root = Path(configured).resolve() if configured else (root_dir / _DEMO_SANDBOX_DEFAULT)
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    sample = root / _DEMO_SAMPLE_FILE
+    if not sample.exists():
+        sample.write_text(_DEMO_SAMPLE_TEXT, encoding="utf-8")
+    return root
+
+
 @app.command()
-def health() -> None:
-    """Boot through the startup guard and show resolved config (proves config flows)."""
+def init() -> None:
+    """One-time setup: write secrets to .env, create the ledger, seed the demo files.
+
+    Safe to re-run: existing values in .env are kept, the ledger is migrated in place, the sample
+    file is not overwritten. Exit 0 when ready, 2 if the config folder cannot be found.
+    """
     configure_logging(get_settings().log_level)
-    log = get_logger("gatekeeper.health")
+    settings = get_settings()
+    try:
+        config = load_config(settings)
+    except ConfigError as exc:
+        _console.print(f"[bold red][ERROR] {exc}[/]")
+        raise typer.Exit(code=2) from exc
+
+    root = settings.project_root
+    env_path = root / ENV_FILE
+    existing = _read_env_file(env_path)
+    updates: dict[str, str] = {}
+    if not existing.get(_ENV_HMAC) and not os.environ.get(_ENV_HMAC):
+        updates[_ENV_HMAC] = secrets.token_hex(32)
+    if not existing.get(_ENV_AGENT_TOKEN) and not os.environ.get(_ENV_AGENT_TOKEN):
+        token = _first_token(config["identities"], "operator")
+        if token:
+            updates[_ENV_AGENT_TOKEN] = token
+    written = _upsert_env(env_path, updates) if updates else []
+    get_settings.cache_clear()  # the ledger below must see the key that was just written
+
     try:
         settings, config = boot()
+        with _opened_ledger() as store:
+            entries = store.verify().checked
     except ConfigError as exc:
-        # fail-loud: clear message + non-zero exit, never a silent insecure boot.
-        log.error("health check failed", extra={"reason": str(exc)})
+        _console.print(f"[bold red][ERROR] {exc}[/]")
+        raise typer.Exit(code=2) from exc
+    sandbox = _seed_demo_sandbox(root)
+
+    table = Table(title="GateKeeperAI - init", show_header=False, box=box.ASCII)
+    table.add_row(
+        "secrets file",
+        f"{env_path}  ({'wrote ' + ', '.join(written) if written else 'kept as is'})",
+    )
+    table.add_row("audit ledger", f"{ledger_path(config)}  ({entries} entries, chain intact)")
+    table.add_row("demo sandbox", f"{sandbox} ({_DEMO_SAMPLE_FILE})")
+    table.add_row("governed servers", ", ".join(str(u.get("name")) for u in config["upstreams"]))
+    _console.print(table)
+    _console.print(
+        "Ready. Next: [bold]gatekeeper doctor[/] prints the config to paste into your MCP host."
+    )
+
+
+# --- doctor -----------------------------------------------------------------------------------
+def _gatekeeper_executable() -> str:
+    """Absolute path of the ``gatekeeper`` command an MCP host should launch."""
+    found = shutil.which("gatekeeper")
+    if found:
+        return str(Path(found).resolve())
+    bin_dir = Path(sys.executable).resolve().parent
+    candidate = bin_dir / ("gatekeeper.exe" if os.name == "nt" else "gatekeeper")
+    return str(candidate)
+
+
+def _launcher_ok(command: list[str]) -> tuple[bool, str]:
+    """Can this upstream's launcher be found? Bare python is pinned to this interpreter."""
+    if not command:
+        return False, "no command"
+    head = command[0]
+    if head in ("python", "python3") or head == sys.executable:
+        if len(command) >= 3 and command[1] == "-m":
+            module = command[2]
+            found = importlib.util.find_spec(module.split(".")[0]) is not None
+            return found, f"module {module} {'found' if found else 'NOT installed'}"
+        return True, "this interpreter"
+    if shutil.which(head) or Path(head).is_file():
+        return True, f"{head} found"
+    return False, f"{head} not on PATH"
+
+
+def host_config(settings: Settings) -> dict[str, Any]:
+    """The ``mcpServers`` block an MCP host (Claude Desktop, an IDE) needs — absolute paths only."""
+    return {
+        "mcpServers": {
+            "gatekeeper": {
+                "command": _gatekeeper_executable(),
+                "args": ["serve"],
+                "env": {"GATEKEEPER_CONFIG_DIR": str(settings.config_dir.resolve())},
+            }
+        }
+    }
+
+
+@app.command()
+def doctor(
+    as_json: bool = typer.Option(False, "--json", help="Print only the MCP host config JSON."),
+) -> None:
+    """Check secrets, ledger, policy, identities and servers; print the MCP host config.
+
+    Exit 0 when everything passes, 1 when a check fails, 2 when the gateway cannot even boot.
+    """
+    configure_logging(get_settings().log_level)
+    log = get_logger("gatekeeper.doctor")
+    settings = get_settings()
+    checks: list[tuple[str, bool, str]] = []
+
+    try:
+        config = load_config(settings)
+    except ConfigError as exc:
         _console.print(f"[bold red][ERROR] GateKeeperAI cannot boot:[/]\n{exc}")
         raise typer.Exit(code=2) from exc
 
+    try:
+        validate_security(settings)
+        checks.append(("HMAC key", True, "set (chain key, validated)"))
+    except ConfigError as exc:
+        checks.append(("HMAC key", False, str(exc).split(". ")[0]))
+
+    if checks[-1][1]:
+        try:
+            with _opened_ledger() as store:
+                result = store.verify()
+            checks.append(
+                (
+                    "audit ledger",
+                    result.ok,
+                    f"{ledger_path(config)} ({result.checked} entries, {result.detail})",
+                )
+            )
+        except typer.Exit:
+            checks.append(("audit ledger", False, "cannot open (see error above)"))
+    else:
+        checks.append(("audit ledger", False, "skipped: no HMAC key"))
+
+    try:
+        from gatekeeper.adapters.policy.cedar import CedarPolicyEngine
+
+        CedarPolicyEngine.from_config(policy_dir(config))
+        checks.append(("policy", True, f"{policy_dir(config)} parses"))
+    except ConfigError as exc:
+        checks.append(("policy", False, str(exc)))
+
+    identity_kind = config["platform"].get("adapters", {}).get("identity", "static_token")
+    if identity_kind == "static_token":
+        tokens = {str(i.get("token")): i for i in config["identities"]}
+        who = tokens.get(settings.agent_token)
+        if who:
+            checks.append(
+                ("agent token", True, f"{who.get('principal')} ({who.get('role')}) for stdio")
+            )
+        else:
+            checks.append(
+                (
+                    "agent token",
+                    False,
+                    f"{_ENV_AGENT_TOKEN} is unset or matches no identity "
+                    "(run `gatekeeper init`, or set a token from config/identities.yaml)",
+                )
+            )
+    else:
+        checks.append(("identity", True, f"{identity_kind} (per-request tokens)"))
+
+    for upstream in config["upstreams"]:
+        ok, detail = _launcher_ok([str(p) for p in upstream.get("command", [])])
+        checks.append((f"server: {upstream.get('name')}", ok, detail))
+
+    all_ok = all(ok for _, ok, _ in checks)
+    if not as_json:
+        table = Table(title="GateKeeperAI - doctor", box=box.ASCII)
+        table.add_column("check")
+        table.add_column("status")
+        table.add_column("detail")
+        for name, ok, detail in checks:
+            table.add_row(name, "[green]OK[/]" if ok else "[red]FAIL[/]", detail)
+        _console.print(table)
+        _console.print(
+            "Paste this into your MCP host (Claude Desktop: claude_desktop_config.json; "
+            "other hosts: their mcpServers block):"
+        )
+    _console.print(json.dumps(host_config(settings), indent=2))
+    log.info("doctor", extra={"ok": all_ok, "checks": [(n, ok) for n, ok, _ in checks]})
+    if not all_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def health() -> None:
+    """Boot through the startup guard and show the resolved config (a liveness-style check).
+
+    Lighter than ``doctor``: proves the gateway CAN boot (key present, config parses) without
+    checking the agent token or launching anything. Exit 0, or 2 on a boot failure.
+    """
+    configure_logging(get_settings().log_level)
+    try:
+        settings, config = boot()
+    except ConfigError as exc:
+        _console.print(f"[bold red][ERROR] GateKeeperAI cannot boot:[/]\n{exc}")
+        raise typer.Exit(code=2) from exc
     platform = config["platform"]
     adapters = platform.get("adapters", {})
-    # Read values BACK from each source to prove they actually flow (no dead config):
-    # box.ASCII => deterministic, cp1252-safe borders on every terminal (incl. legacy Windows).
     table = Table(title="GateKeeperAI - health", show_header=False, box=box.ASCII)
-    table.add_row("env (.env)", settings.env)
-    table.add_row("log level (.env)", settings.log_level)
+    table.add_row("env", settings.env)
     table.add_row("HMAC key", "set (validated, fail-closed)")
-    table.add_row("ledger path (platform.yaml)", ledger_path(config))
-    table.add_row(
-        "hash algo (platform.yaml)", str(platform.get("ledger", {}).get("hash_algo", "?"))
-    )
-    table.add_row("adapters (platform.yaml)", ", ".join(f"{k}={v}" for k, v in adapters.items()))
-    table.add_row("upstreams registered", str(len(config["upstreams"])))
-    table.add_row("identities (dev map)", str(len(config["identities"])))
+    table.add_row("audit ledger", ledger_path(config))
+    table.add_row("policy dir", policy_dir(config))
+    table.add_row("adapters", ", ".join(f"{k}={v}" for k, v in adapters.items()))
+    table.add_row("transport", str(platform.get("transport", {}).get("mode", "stdio")))
+    table.add_row("servers registered", str(len(config["upstreams"])))
+    table.add_row("identities", str(len(config["identities"])))
     _console.print(table)
-    log.info(
-        "health ok",
-        extra={
-            "env": settings.env,
-            "adapters": adapters,
-            "upstreams": len(config["upstreams"]),
-            "identities": len(config["identities"]),
-        },
-    )
+    _console.print("For a full check-up (token, ledger, policy, servers): gatekeeper doctor")
 
 
+# --- serve ------------------------------------------------------------------------------------
 @app.command()
 def serve(
     transport: str | None = typer.Option(
         None,
         "--transport",
-        help="stdio | http. Default: transport.mode in platform.yaml.",
+        help="stdio | http. Default: transport.mode in platform.yaml / GATEKEEPER_TRANSPORT.",
     ),
 ) -> None:
     """Run the governed gateway (transparent MCP proxy) over stdio or Streamable HTTP.
 
-    Exit 2 on misconfig (no HMAC key / no ledger table / non-loopback HTTP bind without the
-    ADR-009 ack) or, for stdio, an unauthenticated agent token.
+    Exit 2 on misconfig (no HMAC key / non-loopback HTTP bind without the ack / placeholder
+    tokens on an exposed bind) or, for stdio, an unauthenticated agent token.
     """
     import anyio
 
@@ -132,9 +381,15 @@ def serve(
     except (ConfigError, IdentityError) as exc:
         # stderr, NOT stdout: stdout is the MCP protocol channel here (see _err_console).
         _err_console.print(f"[bold red][ERROR] GateKeeperAI cannot serve:[/]\n{exc}")
+        if isinstance(exc, IdentityError):
+            _err_console.print(
+                f"Set {_ENV_AGENT_TOKEN} in .env to a token from config/identities.yaml "
+                "(`gatekeeper init` does this), then run `gatekeeper doctor`."
+            )
         raise typer.Exit(code=2) from exc
 
 
+# --- ledger commands --------------------------------------------------------------------------
 @app.command()
 def tail(
     limit: int = 20,
@@ -165,29 +420,38 @@ def tail(
             row.insert(1, e.call_id)
         table.add_row(*row)
     _console.print(table)
+    if not with_id:
+        _console.print("Add --with-id to see the id each row passes to `gatekeeper show`.")
 
 
 @app.command()
-def verify() -> None:
-    """Verify audit-ledger integrity. Exit 0=intact, 1=tampered, 2=misconfig."""
+def verify(
+    expect_head: str | None = typer.Option(
+        None,
+        "--expect-head",
+        help="A head hash printed by an earlier verify. Detects records removed from the end.",
+    ),
+) -> None:
+    """Verify audit-ledger integrity. Exit 0=intact, 1=tampered, 2=misconfig.
+
+    Pin the printed head somewhere the ledger's host cannot reach (a ticket, a separate log);
+    pass it back with --expect-head to also detect a truncated chain.
+    """
     configure_logging(get_settings().log_level)
     log = get_logger("gatekeeper.verify")
     with _opened_ledger() as store:
-        result = store.verify()
-        head = store.read(limit=1)
+        result = store.verify(expected_head=expect_head)
     if result.ok:
-        head_hash = head[0].entry_hash if head else "(empty)"
         _console.print(f"[bold green]OK[/] ledger intact - {result.checked} entries verified")
-        # Emit the head hash so it can be pinned out-of-band (detects tail-truncation).
-        _console.print(f"head: {head_hash}")
-        log.info("verify ok", extra={"checked": result.checked, "head": head_hash})
+        _console.print(f"head: {result.head}")
+        log.info("verify ok", extra={"checked": result.checked, "head": result.head})
         return
+    where = f"broken at seq={result.broken_at}: " if result.broken_at is not None else ""
     _console.print(
-        f"[bold red]TAMPERED[/] broken at seq={result.broken_at}: {result.detail} "
-        f"(verified {result.checked} before the break)"
+        f"[bold red]TAMPERED[/] {where}{result.detail} (verified {result.checked} before the break)"
     )
     log.error("verify failed", extra={"broken_at": result.broken_at, "detail": result.detail})
-    # M3.4 alert hook: a tampered ledger is THE signal this product exists for — page someone.
+    # Alert hook: a tampered ledger is THE signal this product exists for — page someone.
     # Fail-safe (never raises, exit code stays 1) and off when no webhook is configured.
     from gatekeeper.infra.alerts import WebhookAlerter
 
@@ -229,7 +493,6 @@ def show(call_id: str) -> None:
     table.add_row("verdict", f"[bold {verdict_color}]{entry.verdict}[/]")
     table.add_row("reason", entry.reason)
     table.add_row("result", entry.result_summary or "-")
-    table.add_row("risk", "-" if entry.risk is None else f"{entry.risk:.2f}")
     table.add_row("payload_hash", entry.payload_hash)
     table.add_row("prev_hash", entry.prev_hash or "-")
     table.add_row("entry_hash", entry.entry_hash or "-")
@@ -239,7 +502,7 @@ def show(call_id: str) -> None:
 
 @app.command()
 def stats(limit: int = 1000) -> None:
-    """Platform-health snapshot from the audit ledger (M3.4 operator surface).
+    """Platform-health snapshot from the audit ledger.
 
     Calls, allow/deny counts and rates, denies by principal, and busiest tools — derived from
     the last ``limit`` ledger entries (decision entries only, so a call is counted once).
@@ -281,41 +544,40 @@ def stats(limit: int = 1000) -> None:
     )
 
 
-@app.command(name="seed-demo")
+# --- seed-demo (kept for existing scripts; `init` supersedes it) -----------------------------
+@app.command(name="seed-demo", hidden=True)
 def seed_demo() -> None:
-    """Prepare the local demo and print a ready-to-run recipe (non-destructive).
-
-    Reads the committed config (``config/*.yaml``) to show which upstreams + identities are
-    governed, seeds the ``demo_file_server`` sandbox with a sample file (so a read works
-    immediately), and prints the exact steps to run the gateway. It deliberately does NOT overwrite
-    your config and does NOT require the HMAC key — it is a setup helper, not a governance
-    operation. Exit 0, or 2 if the config dir is missing (fail-loud).
-    """
+    """Seed the demo sandbox and show what is governed (no secrets needed). Prefer ``init``."""
     configure_logging(get_settings().log_level)
     log = get_logger("gatekeeper.seed-demo")
+    settings = get_settings()
     try:
-        config = load_config()  # no security guard: prep step, runnable before .env is filled in
+        config = load_config(settings)  # no security guard: prep step, runnable before .env exists
     except ConfigError as exc:
         _console.print(f"[bold red][ERROR] {exc}[/]")
         raise typer.Exit(code=2) from exc
 
-    sandbox = _seed_demo_sandbox()
+    sandbox = _seed_demo_sandbox(settings.project_root)
     _print_governed(config)
-    _print_demo_recipe(sandbox)
+    steps = Table(title="run the demo", box=box.ASCII)
+    steps.add_column("#")
+    steps.add_column("command")
+    steps.add_row("1", "gatekeeper init      # writes GATEKEEPER_HMAC_KEY + agent token to .env")
+    steps.add_row("2", "gatekeeper doctor    # checks everything, prints the MCP host config")
+    steps.add_row("3", "make serve           # or let your MCP host launch it (doctor's JSON)")
+    steps.add_row("4", "make tail / make verify / gatekeeper show <call_id>")
+    _console.print(steps)
+    _console.print(f"demo sandbox ready: {sandbox} (sample file: {_DEMO_SAMPLE_FILE})")
+    # markup=False: the literal "[demo]" must not be parsed as a Rich style tag.
+    _console.print(
+        "Both upstreams above are governed with ZERO gateway code. The 'time' upstream is a real "
+        'third-party server; install its package to launch it: pip install -e ".[demo]"',
+        markup=False,
+    )
     log.info(
         "seed-demo ready",
         extra={"upstreams": len(config["upstreams"]), "identities": len(config["identities"])},
     )
-
-
-def _seed_demo_sandbox() -> Path:
-    """Create the demo sandbox + a sample file (idempotent); return the resolved path."""
-    root = Path(os.environ.get(_DEMO_SANDBOX_ENV, _DEMO_SANDBOX_DEFAULT)).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    sample = root / _DEMO_SAMPLE_FILE
-    if not sample.exists():
-        sample.write_text(_DEMO_SAMPLE_TEXT, encoding="utf-8")
-    return root
 
 
 def _print_governed(config: dict[str, Any]) -> None:
@@ -337,26 +599,6 @@ def _print_governed(config: dict[str, Any]) -> None:
     for p in config["identities"]:
         identities.add_row(str(p.get("principal", "?")), str(p.get("role", "?")))
     _console.print(identities)
-
-
-def _print_demo_recipe(sandbox: Path) -> None:
-    """Print the exact, ordered steps to run the governed demo."""
-    steps = Table(title="run the demo (set secrets in .env first)", box=box.ASCII)
-    steps.add_column("#")
-    steps.add_column("command")
-    steps.add_row("1", "export GATEKEEPER_HMAC_KEY=$(openssl rand -hex 32)")
-    steps.add_row("2", "export GATEKEEPER_AGENT_TOKEN=<a token from config/identities.yaml>")
-    steps.add_row("3", "make migrate     # create the tamper-evident audit ledger")
-    steps.add_row("4", "make serve       # gateway as a stdio MCP server; point your agent at it")
-    steps.add_row("5", "make tail / make verify / gatekeeper show <call_id>")
-    _console.print(steps)
-    _console.print(f"demo sandbox ready: {sandbox} (sample file: {_DEMO_SAMPLE_FILE})")
-    # markup=False: the literal "[demo]" must not be parsed as a Rich style tag.
-    _console.print(
-        "Both upstreams above are governed with ZERO gateway code. The 'time' upstream is a real "
-        'third-party server; install its package to launch it: pip install -e ".[demo]"',
-        markup=False,
-    )
 
 
 if __name__ == "__main__":

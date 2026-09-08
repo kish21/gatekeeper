@@ -58,4 +58,8 @@ class VerifyResult(BaseModel):
     broken_at: int | None = Field(
         default=None, description="seq of the first broken entry, if any."
     )
+    head: str | None = Field(
+        default=None,
+        description="Hash of the last verified entry (pin it; pass it back as expected_head).",
+    )
     detail: str = ""

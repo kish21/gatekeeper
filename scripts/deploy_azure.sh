@@ -1,68 +1,75 @@
 #!/usr/bin/env bash
-# One-shot deploy of the GateKeeper gateway to Azure Container Apps (M3.3).
+# Deploy the GateKeeper gateway to Azure Container Apps — one command, safe to re-run.
 #
-# Encodes docs/deploy/azure-container-apps.md as an IDEMPOTENT script: safe to re-run, it converges
-# to the same resources. The image bakes its own HTTP config (deploy/container/platform.yaml binds
-# 0.0.0.0:8765 with the ADR-009 ack, ledger at /data/audit.db), so the only runtime secret is the
-# HMAC key — created ONCE and kept stable across re-runs (changing it would break the existing
-# hash-chained ledger's `verify`).
+#   bash scripts/deploy_azure.sh
 #
-# PREREQUISITES (yours — this script does NOT do them):
-#   1. Install the Azure CLI:  winget install -e --id Microsoft.AzureCLI   (then restart the shell)
-#   2. Sign in:                az login
-#   3. Pick the subscription:  az account set --subscription "<name-or-id>"   (optional)
-#   Run from the repo root:    bash scripts/deploy_azure.sh
+# What you need first (the script checks and tells you if something is missing):
+#   1. The Azure CLI, signed in:   az login          (install: https://aka.ms/installazurecli)
+#   2. This repository checked out; run the script from its root.
+#   On Windows, run it from Git Bash.
 #
-# COST: this CREATES BILLABLE resources on your *current* subscription — a 0.25 vCPU/0.5Gi container
-# app (1 always-on replica) + a Standard_LRS file share, ~a few EUR/month. Remove everything with:
-#   az group delete -n "${GK_RG:-gatekeeper-rg}" --yes --no-wait
+# What it creates on your CURRENT subscription (billable; a few EUR/month):
+#   a resource group, a container registry, a Container Apps environment, and one always-on
+#   container app (0.25 vCPU / 0.5 GiB) with public HTTPS ingress.
+#   Remove everything with:   az group delete -n "${GK_RG:-gatekeeper-rg}" --yes --no-wait
 #
-# HONEST NOTE: this is the FIRST live run of this path (the Azure proof was previously docs-only).
-# It gets you to: a live HTTPS gateway, /healthz green, ledger on persistent storage, `verify` clean.
-# The EXTERNAL governed /mcp call + real OIDC are the documented "make it real" follow-ups printed at
-# the end (they need the public FQDN allow-listed in the image config + your IdP tenant).
+# What you get:
+#   * a live HTTPS gateway with /healthz, /metrics and the governed /mcp endpoint
+#   * the public hostname is trusted automatically (no second build to allow-list it)
+#   * fresh, random operator + readonly tokens generated for THIS deployment and stored as a
+#     Container Apps secret — the repository's demo tokens are never exposed to the internet
+#   * a ready-to-run probe command printed at the end that exercises allow / deny / identity
 #
-# Override any name via env: GK_LOCATION GK_RG GK_APP GK_ENV GK_SHARE GK_ACR GK_SA GK_SUFFIX
+# What it does NOT give you yet (honest):
+#   * a DURABLE audit ledger. By default the ledger lives on the container's own disk: correct
+#     and tamper-evident while the replica runs, lost when it restarts. Azure Files (SMB) was
+#     measured to corrupt SQLite (audit.db stayed 0 bytes, records lost), so it is NOT the default;
+#     GK_LEDGER_STORAGE=files provisions it anyway if you want to try. Durable hosted audit
+#     (Postgres ledger or an NFS share) is the tracked follow-up — see docs/deploy/azure-container-apps.md.
+#   * corporate login. This deploys with static tokens. Switch to OIDC by setting env vars on the
+#     app (GATEKEEPER_IDENTITY=oidc + GATEKEEPER_OIDC_*), no rebuild — see the deploy guide.
+#
+# Override any name via env: GK_LOCATION GK_RG GK_APP GK_ENV GK_ACR GK_SUFFIX GK_LEDGER_STORAGE
 set -euo pipefail
 
-# Windows/Git-Bash: the Azure CLI streams the ACR build log through a cp1252 console and dies with
-# `UnicodeEncodeError: 'charmap' codec can't encode` on pip's non-ASCII output — the SERVER-side
-# build keeps running, only the local CLI crashes (observed on the first live run, 2026-08-24).
-# Forcing UTF-8 on the CLI's own stdio fixes it and is a no-op on Linux/macOS.
+# Windows/Git-Bash: keep the Azure CLI's own console output UTF-8 (a cp1252 console otherwise
+# kills the CLI on non-ASCII build logs). No-op on Linux/macOS.
 export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
 
-say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
-die() { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\n\033[1;33mWARNING:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- preflight -------------------------------------------------------------------------------
-command -v az  >/dev/null 2>&1 || die "Azure CLI not found. Install it (see the header) and re-run."
-command -v openssl >/dev/null 2>&1 || die "openssl not found (needed to generate the HMAC key)."
-command -v curl >/dev/null 2>&1 || die "curl not found (needed for the /healthz smoke test)."
-[ -f Dockerfile ] || die "Run this from the repo root (Dockerfile not found here)."
-
+command -v az >/dev/null 2>&1 || die "Azure CLI not found. Install it (https://aka.ms/installazurecli), then 'az login' and re-run."
+command -v openssl >/dev/null 2>&1 || die "openssl not found (needed to generate secrets). On Windows, run this from Git Bash."
+command -v curl >/dev/null 2>&1 || die "curl not found (needed for the /healthz check)."
+[ -f Dockerfile ] || die "Run this from the repository root (Dockerfile not found here)."
 az account show >/dev/null 2>&1 || die "Not signed in. Run 'az login' first."
 SUB_NAME="$(az account show --query name -o tsv)"
 SUB_ID="$(az account show --query id -o tsv)"
 
-# --- config (override via env) ---------------------------------------------------------------
+# --- names (override via env) ----------------------------------------------------------------
 LOCATION="${GK_LOCATION:-westeurope}"
 RG="${GK_RG:-gatekeeper-rg}"
 APP="${GK_APP:-gatekeeper}"
 ENVNAME="${GK_ENV:-gatekeeper-env}"
-SHARE="${GK_SHARE:-ledger}"
-# ACR + storage names must be globally unique + lowercase alphanumeric. Derive a DETERMINISTIC
-# per-subscription suffix so re-runs hit the same resources (idempotent), unless overridden.
+LEDGER_STORAGE="${GK_LEDGER_STORAGE:-ephemeral}"   # ephemeral | files
+# Registry names must be globally unique + lowercase alphanumeric: derive a deterministic
+# per-subscription suffix so re-runs converge on the same resources.
 SUFFIX="${GK_SUFFIX:-$(printf '%s' "$SUB_ID" | tr -dc 'a-f0-9' | cut -c1-12)}"
 ACR="${GK_ACR:-gkacr${SUFFIX}}"
 SA="${GK_SA:-gkled${SUFFIX}}"
-# A UNIQUE tag per build. Deploying `:latest` twice is a no-op: Container Apps compares the image
-# REFERENCE, sees an identical string, and keeps the running revision — so a rebuilt image is
-# silently ignored and the old code keeps serving (cost us the 421 on the first live run, when the
-# FQDN allow-list never reached the container). A changing tag forces a new revision, always.
-# `:latest` is still pushed alongside, as the human-readable "what is current" pointer.
+SHARE="ledger"
+# A unique tag per build: Container Apps compares image references, so re-deploying ':latest'
+# is a silent no-op. ':latest' is still pushed as the human-readable pointer.
 IMAGE_NAME="gatekeeper"
-IMAGE_VERSION="${GK_IMAGE_TAG:-$(date -u +%Y%m%d%H%M%S)}"
-IMAGE_TAG="$IMAGE_NAME:$IMAGE_VERSION"
+IMAGE_TAG="$IMAGE_NAME:${GK_IMAGE_TAG:-$(date -u +%Y%m%d%H%M%S)}"
+
+case "$LEDGER_STORAGE" in
+  ephemeral|files) ;;
+  *) die "GK_LEDGER_STORAGE must be 'ephemeral' (default) or 'files'." ;;
+esac
 
 cat <<EOF
 
@@ -71,124 +78,96 @@ GateKeeper -> Azure Container Apps
   location     : ${LOCATION}
   resource grp : ${RG}
   registry     : ${ACR}.azurecr.io
-  app          : ${APP}   (1 replica, external HTTPS ingress)
-  ledger store : ${SA} / file share '${SHARE}' -> /data
+  app          : ${APP}   (1 replica, public HTTPS ingress)
+  ledger       : ${LEDGER_STORAGE}$( [ "$LEDGER_STORAGE" = ephemeral ] && printf ' (container disk: lost on restart — see the header)' || printf ' (Azure Files SMB: known to corrupt SQLite — see the header)')
 Press Ctrl-C within 5s to abort.
 EOF
 sleep 5
 
 # --- 1. resource group + registry; build the image IN Azure (no local Docker needed) ---------
-say "1/6 resource group + container registry + image build (this can take a few minutes)"
+say "1/4 resource group + container registry + image build (a few minutes)"
 az group create -n "$RG" -l "$LOCATION" --only-show-errors -o none
 az acr create -n "$ACR" -g "$RG" --sku Basic --admin-enabled true --only-show-errors -o none
-# Queue the build WITHOUT streaming its log. The CLI's streamer renders the log through colorama
-# into the local console; on Windows (cp1252) pip's non-ASCII output kills the CLI with
-# `UnicodeEncodeError: 'charmap' codec can't encode` while the server-side build carries on happily
-# (observed twice on the first live run, 2026-08-24; PYTHONIOENCODING alone does NOT fix it).
-# --no-logs sidesteps the streamer entirely, so we poll the run instead: a failed build must still
-# stop the deploy rather than push a stale image forward.
+# Queue the build without streaming its log (the streamer crashes on a Windows console), then
+# poll it: a failed build must stop the deploy rather than push a stale image forward.
 BUILD_RUN="$(az acr build -r "$ACR" -t "$IMAGE_TAG" -t "$IMAGE_NAME:latest" . --no-logs --query runId -o tsv)"
 [ -n "$BUILD_RUN" ] || die "could not queue the image build (no run id returned)."
-printf '    build run %s (logs: az acr task logs -r %s --run-id %s) ' "$BUILD_RUN" "$ACR" "$BUILD_RUN"
+printf '    build run %s ' "$BUILD_RUN"
 BUILD_STATUS=""
 for _ in $(seq 1 180); do
   BUILD_STATUS="$(az acr task show-run -r "$ACR" --run-id "$BUILD_RUN" --query status -o tsv 2>/dev/null || echo '')"
-  case "$BUILD_STATUS" in
-    Succeeded|Failed|Canceled|Error|Timeout) break ;;
-  esac
-  printf '.'
-  sleep 10
+  case "$BUILD_STATUS" in Succeeded|Failed|Canceled|Error|Timeout) break ;; esac
+  printf '.'; sleep 10
 done
 printf ' %s\n' "${BUILD_STATUS:-unknown}"
 [ "$BUILD_STATUS" = "Succeeded" ] ||
   die "image build ${BUILD_STATUS:-did not finish}. Inspect: az acr task logs -r $ACR --run-id $BUILD_RUN"
 
-# --- 2. Container Apps environment -----------------------------------------------------------
-say "2/6 Container Apps environment"
+# --- 2. Container Apps environment (+ optional Azure Files) ----------------------------------
+say "2/4 Container Apps environment"
 az extension add -n containerapp --upgrade --only-show-errors -o none
 az provider register -n Microsoft.App --only-show-errors -o none 2>/dev/null || true
 az provider register -n Microsoft.OperationalInsights --only-show-errors -o none 2>/dev/null || true
 az containerapp env create -n "$ENVNAME" -g "$RG" -l "$LOCATION" --only-show-errors -o none
 
-# --- 3. persistent ledger storage (Azure Files -> /data) -------------------------------------
-say "3/6 persistent ledger storage (Azure Files)"
-az storage account create -n "$SA" -g "$RG" -l "$LOCATION" --sku Standard_LRS --only-show-errors -o none
-# -g is REQUIRED here: given a bare account NAME (not a resource id), the CLI cannot construct the
-# id without the group and fails with "argument 'resource_group' is not defined" (first live run).
-az storage share-rm create -g "$RG" --storage-account "$SA" -n "$SHARE" --only-show-errors -o none
-SA_KEY="$(az storage account keys list -n "$SA" -g "$RG" --query '[0].value' -o tsv)"
-az containerapp env storage set -n "$ENVNAME" -g "$RG" --storage-name ledger \
-  --azure-file-account-name "$SA" --azure-file-account-key "$SA_KEY" \
-  --azure-file-share-name "$SHARE" --access-mode ReadWrite --only-show-errors -o none
+if [ "$LEDGER_STORAGE" = files ]; then
+  warn "Azure Files (SMB) does not give SQLite the locking + fsync it needs; measured result: records lost. Proceeding because you asked."
+  az storage account create -n "$SA" -g "$RG" -l "$LOCATION" --sku Standard_LRS --only-show-errors -o none
+  az storage share-rm create -g "$RG" --storage-account "$SA" -n "$SHARE" --only-show-errors -o none
+  SA_KEY="$(az storage account keys list -n "$SA" -g "$RG" --query '[0].value' -o tsv)"
+  az containerapp env storage set -n "$ENVNAME" -g "$RG" --storage-name ledger \
+    --azure-file-account-name "$SA" --azure-file-account-key "$SA_KEY" \
+    --azure-file-share-name "$SHARE" --access-mode ReadWrite --only-show-errors -o none
+fi
 
-# --- 4. deploy the app (1 replica = ADR-007; secret HMAC key set ONCE; external HTTPS) --------
-say "4/6 deploy the app"
+# --- 3. the app: secrets set ONCE, one replica, public ingress, config via env ---------------
+say "3/4 deploy the app"
 ACR_LOGIN="$ACR.azurecr.io"
 if az containerapp show -n "$APP" -g "$RG" -o none 2>/dev/null; then
-  # Re-run: STOP-THEN-START, never a rolling update. The HMAC secret is left UNTOUCHED so the
-  # existing ledger on the volume stays verifiable (a new key would break the hash-chain's `verify`).
-  #
-  # WHY NOT A PLAIN `update --image`: Container Apps rolls revisions — it starts the NEW replica
-  # while the OLD one is still running. Both mount the same Azure Files ledger, so for those seconds
-  # there are TWO writers, which ADR-007 forbids "by construction". Observed on the first live run
-  # (2026-08-24): the new revision died in `alembic upgrade head` with
-  # `sqlite3.OperationalError: database is locked`, the old revision kept serving the STALE config,
-  # and every redeploy silently no-oped. SQLite refusing was the good outcome; a silent second
-  # writer would corrupt the hash chain. Scaling to zero first makes the single-writer invariant
-  # true across deploys too, at the cost of a short outage (ADR-007 already accepts a restart gap).
-  # `--max-replicas 0` is rejected (Azure requires [1,1000]) and there is no `containerapp stop` in
-  # every CLI version, so the old writer is retired by DEACTIVATING its revision — the one action
-  # that terminates the replicas immediately rather than waiting on an idle scale-down.
-  echo "    app exists -> stop-then-start update (ADR-007: never two ledger writers)"
-  OLD_REV="$(az containerapp show -n "$APP" -g "$RG" \
-    --query properties.latestRevisionName -o tsv 2>/dev/null || echo '')"
-  FQDN_NOW="$(az containerapp show -n "$APP" -g "$RG" \
-    --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo '')"
+  # Re-run: stop-then-start, never a rolling update — two replicas would be two writers on one
+  # ledger. The HMAC key + tokens are left untouched so the existing ledger stays verifiable.
+  echo "    app exists -> stop-then-start update (secrets kept)"
+  OLD_REV="$(az containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv 2>/dev/null || echo '')"
+  FQDN_NOW="$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || echo '')"
   if [ -n "$OLD_REV" ]; then
-    # Best-effort: single-revision mode may refuse to deactivate the only revision. If it does, the
-    # drain loop below still gives the old replica time to exit before the new image is applied.
-    az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$OLD_REV" \
-      --only-show-errors -o none 2>/dev/null ||
+    az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$OLD_REV" --only-show-errors -o none 2>/dev/null ||
       echo "    (could not deactivate $OLD_REV - falling back to a timed drain)"
   fi
   printf '    draining the old replica '
   for _ in $(seq 1 24); do
-    # Gone when the live endpoint stops answering: the writer has released the ledger.
-    if [ -z "$FQDN_NOW" ] || ! curl -fsS --max-time 5 "https://$FQDN_NOW/healthz" >/dev/null 2>&1; then
-      break
-    fi
-    printf '.'
-    sleep 5
+    if [ -z "$FQDN_NOW" ] || ! curl -fsS --max-time 5 "https://$FQDN_NOW/healthz" >/dev/null 2>&1; then break; fi
+    printf '.'; sleep 5
   done
   printf ' stopped\n'
   az containerapp update -n "$APP" -g "$RG" --image "$ACR_LOGIN/$IMAGE_TAG" \
     --min-replicas 1 --max-replicas 1 --only-show-errors -o none
 else
+  # Fresh tokens for THIS deployment. Stored as a platform secret, never in the image or config.
+  OP_TOKEN="$(openssl rand -hex 24)"
+  RO_TOKEN="$(openssl rand -hex 24)"
+  IDENTITIES="operator:operator:${OP_TOKEN};readonly:readonly:${RO_TOKEN}"
   az containerapp create -n "$APP" -g "$RG" --environment "$ENVNAME" \
     --registry-server "$ACR_LOGIN" \
     --image "$ACR_LOGIN/$IMAGE_TAG" \
     --target-port 8765 --ingress external \
     --min-replicas 1 --max-replicas 1 \
-    --secrets "hmac-key=$(openssl rand -hex 32)" \
-    --env-vars GATEKEEPER_HMAC_KEY=secretref:hmac-key --only-show-errors -o none
+    --secrets "hmac-key=$(openssl rand -hex 32)" "identities=$IDENTITIES" \
+    --env-vars GATEKEEPER_HMAC_KEY=secretref:hmac-key GATEKEEPER_IDENTITIES=secretref:identities \
+    --only-show-errors -o none
 fi
 
-# --- 5. mount the ledger volume at /data (idempotent YAML patch) ------------------------------
-say "5/6 mount the ledger volume at /data"
-PYBIN=""
-for cand in python3 python ./.venv/Scripts/python.exe; do
-  if "$cand" -c "import yaml" >/dev/null 2>&1; then PYBIN="$cand"; break; fi
-done
-if [ -z "$PYBIN" ]; then
-  cat <<'EOF'
-    SKIPPED: no Python with PyYAML found to patch the volume mount automatically.
-    Do it manually (one time):
-      az containerapp show -n <app> -g <rg> -o yaml > app.yaml
-      # under properties.template add:    volumes: [{name: ledger, storageName: ledger, storageType: AzureFile}]
-      # under the container add:          volumeMounts: [{volumeName: ledger, mountPath: /data}]
-      az containerapp update -n <app> -g <rg> --yaml app.yaml && rm app.yaml
-EOF
-else
+if [ "$LEDGER_STORAGE" = files ]; then
+  # Mount the share at /data (only the YAML update flow can add a volume). Uses the Azure CLI's
+  # own Python (it bundles PyYAML), so nothing extra is needed on the machine.
+  PYBIN=""
+  for cand in "/opt/az/bin/python3" "/usr/lib/azure-cli/bin/python" \
+              "/c/Program Files/Microsoft SDKs/Azure/CLI2/python.exe" \
+              "/c/Program Files (x86)/Microsoft SDKs/Azure/CLI2/python.exe" python3 python; do
+    if [ -x "$cand" ] || command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c "import yaml" >/dev/null 2>&1; then PYBIN="$cand"; break; fi
+    fi
+  done
+  [ -n "$PYBIN" ] || die "no Python with PyYAML found to patch the volume mount (install PyYAML or re-run with GK_LEDGER_STORAGE=ephemeral)."
   APP_YAML="$(mktemp).yaml"
   az containerapp show -n "$APP" -g "$RG" -o yaml > "$APP_YAML"
   "$PYBIN" - "$APP_YAML" <<'PY'
@@ -213,8 +192,8 @@ PY
   rm -f "$APP_YAML"
 fi
 
-# --- 6. wait for liveness + report -----------------------------------------------------------
-say "6/6 wait for /healthz"
+# --- 4. wait for liveness + report ----------------------------------------------------------
+say "4/4 wait for /healthz"
 FQDN="$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)"
 OK=0
 for _ in $(seq 1 40); do
@@ -223,21 +202,24 @@ for _ in $(seq 1 40); do
 done
 [ "$OK" = 1 ] || die "/healthz never came up. Inspect: az containerapp logs show -n $APP -g $RG --follow"
 
-printf '\n\033[1;32mDEPLOYED.\033[0m  https://%s/healthz -> ok   (gateway live, ledger on the Azure Files volume)\n' "$FQDN"
+printf '\n\033[1;32mDEPLOYED.\033[0m  https://%s\n' "$FQDN"
 cat <<EOF
 
-Verify the audit ledger inside the running container (interactive):
-  az containerapp exec -n ${APP} -g ${RG} --command "gatekeeper verify"     # -> OK ledger intact
-  az containerapp exec -n ${APP} -g ${RG} --command "gatekeeper tail"
-Live metrics:
-  curl https://${FQDN}/metrics
+Prove it governs, from this machine over the public internet (allow, policy deny, identity deny):
+  IDS=\$(az containerapp secret show -n ${APP} -g ${RG} --secret-name identities --query value -o tsv)
+  python -m scripts.probe_hosted --url "https://${FQDN}" \\
+    --operator-token "\$(echo "\$IDS" | cut -d';' -f1 | cut -d: -f3)" \\
+    --readonly-token "\$(echo "\$IDS" | cut -d';' -f2 | cut -d: -f3)"
 
-MAKE IT REAL (before any non-demo use) — see docs/deploy/azure-container-apps.md step 8:
-  * Allow-list the public host so external /mcp calls pass the DNS-rebinding check:
-      set transport.http_allowed_hosts: ["${FQDN}", "${FQDN}:*"] in the image config and re-deploy.
-      (BOTH forms: ":*" only matches a Host header carrying a port; :443 sends none.)
-  * Switch identity from the demo static tokens to OIDC (your Entra/Okta tenant):
-      docs/features/oidc-identity.md  (adapters.identity: oidc + your tenant).
+Look at the audit trail inside the running container:
+  az containerapp exec -n ${APP} -g ${RG} --command "gatekeeper tail --with-id"
+  az containerapp exec -n ${APP} -g ${RG} --command "gatekeeper verify"
+Live metrics:  curl https://${FQDN}/metrics
+
+Switch to your corporate login (no rebuild):
+  az containerapp update -n ${APP} -g ${RG} --set-env-vars GATEKEEPER_IDENTITY=oidc \\
+    GATEKEEPER_OIDC_ISSUER=<issuer> GATEKEEPER_OIDC_AUDIENCE=<audience> \\
+    GATEKEEPER_OIDC_GROUP_ROLE_MAP="<group-id>=operator,<group-id>=readonly"
 
 Tear everything down:
   az group delete -n ${RG} --yes --no-wait
