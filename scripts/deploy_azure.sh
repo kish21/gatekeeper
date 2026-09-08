@@ -22,7 +22,9 @@
 #
 #   * a DURABLE audit ledger on a managed PostgreSQL database: the records survive the replica
 #     being replaced, `verify` works from any process, and more than one replica may serve.
-#     Already have a database? Set GK_PG_URL to its connection string and no server is created.
+#     Already have a database? Set GK_PG_URL to its connection string and no server is created:
+#       GK_PG_URL='postgresql://user:pw@host.postgres.database.azure.com:5432/gatekeeper?sslmode=require'
+#     Percent-encode a password containing @ : / ? # or & — it is going into a URL.
 #   * the approvals desk at /ui, behind its own generated token
 #
 # What it does NOT give you yet (honest):
@@ -130,6 +132,8 @@ say "2/4 Container Apps environment"
 az extension add -n containerapp --upgrade --only-show-errors -o none
 az provider register -n Microsoft.App --only-show-errors -o none 2>/dev/null || true
 az provider register -n Microsoft.OperationalInsights --only-show-errors -o none 2>/dev/null || true
+[ "$LEDGER_STORAGE" = postgres ] &&
+  az provider register -n Microsoft.DBforPostgreSQL --only-show-errors -o none 2>/dev/null || true
 az containerapp env create -n "$ENVNAME" -g "$RG" -l "$LOCATION" --only-show-errors -o none
 
 LEDGER_URL=""
@@ -156,7 +160,10 @@ if [ "$LEDGER_STORAGE" = postgres ]; then
         --public-access 0.0.0.0 --yes --only-show-errors -o none ||
         die "could not create the PostgreSQL server. Create one yourself and re-run with GK_PG_URL=<connection string>."
       # 0.0.0.0 in Azure's firewall means "Azure services", not "the internet": the container app
-      # reaches it, arbitrary hosts do not.
+      # reaches it, arbitrary hosts do not. To connect from your own machine (psql, a migration,
+      # a backup check), add your address:
+      #   az postgres flexible-server firewall-rule create -n <server> -g <rg> \
+      #     --rule-name me --start-ip-address <your ip> --end-ip-address <your ip>
       LEDGER_URL="postgresql://${PG_ADMIN}:${PG_PASSWORD}@${PG_SERVER}.postgres.database.azure.com:5432/${PG_DB}?sslmode=require"
     fi
   fi
