@@ -1,5 +1,7 @@
 # docs/
 
+- **`USE-CASE-STORY.md`** — the use case told as a story for non-technical readers (start here);
+  `HOW-IT-WORKS.md` and `SHOWCASE-AZURE.md` are the plain-English guides that follow it.
 - **`design/`** — design docs for big tasks (the per-feature contract: exit criteria, interaction map,
   test plan). Created before building a large feature; reconciled to code before merge.
 - **`features/`** — one short doc per built feature (written by the /build loop).
