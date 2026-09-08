@@ -11,24 +11,24 @@ keywords = ["mcp", "model-context-protocol", "governance", "gateway", "rbac", "a
 # --- Runtime (prod) dependencies. Pins added in /foundation when first installed. ---
 dependencies = [
   "mcp>=1.27.2,<2",      # official MCP SDK; 2.x renamed the client API (streamable_http_client, httpx2) — migrate deliberately
-  "pydantic>=2.13.4",         # typed contracts / DTOs
-  "pydantic-settings>=2.14.1",# .env-driven settings (no hardcoding)
+  "pydantic>=2.13.5",         # typed contracts / DTOs
+  "pydantic-settings>=2.15.0",# .env-driven settings (no hardcoding)
   "python-dotenv>=1.2.2",    # read .env values for upstream credential refs ({from_env: NAME})
   "pyyaml>=6.0.3",           # YAML config loader
   "typer>=0.26.7",         # operator CLI
   "rich>=15.0.0",            # CLI output
-  "fastapi>=0.137.0",      # HTTP MCP transport + (M2) approval API
-  "uvicorn[standard]>=0.49.0",
+  "fastapi>=0.141.1",      # HTTP MCP transport + (M2) approval API
+  "uvicorn[standard]>=0.52.4",
   "httpx>=0.28.1",         # async HTTP for upstream/LLM
-  "sqlalchemy>=2.0.50",       # ledger persistence
-  "alembic>=1.18.4",       # DB migrations (never hand-edit schema)
+  "sqlalchemy>=2.0.52",       # ledger persistence
+  "alembic>=1.19.1",       # DB migrations (never hand-edit schema)
   "cedarpy",             # Cedar policy engine (policy-as-code, analyzable)
   "PyJWT[crypto]>=2.13.0",   # OIDC identity adapter (M3.2): JWKS signature/aud/exp validation
 ]
 
 [project.optional-dependencies]
 # M2 AI layer — install only when building risk-scoring. Keeps M1 lean.
-ai = ["anthropic>=0.109.1"]
+ai = ["anthropic>=0.111.0"]
 # Demo governed targets — real, third-party MCP servers used to prove "govern ANY server, zero code"
 # (M1.4). NOT a gateway runtime dependency: it is a server GateKeeper governs, registered purely in
 # config/upstreams.yaml. Install with `pip install -e ".[demo]"`.
@@ -41,17 +41,17 @@ postgres = ["psycopg[binary]>=3.2.12"]
 [dependency-groups]
 # Dev/test tooling — NOT shipped to prod.
 dev = [
-  "pytest>=9.1.0",
+  "pytest>=9.1.1",
   "pytest-asyncio>=1.4.0",
   "pytest-cov>=7.1.0",
   "pytest-timeout>=2.4.0",   # a hung async test must FAIL with stacks, never wedge CI
 
-  "ruff>=0.15.17",
-  "mypy>=2.1.0",
+  "ruff>=0.16.5",
+  "mypy>=2.3.1",
   "types-PyYAML",
   "pip-audit>=2.10.1",
   "psycopg[binary]>=3.2.12",   # the durable-ledger integration tests run against a real Postgres
-  "pre-commit>=4.6.0",
+  "pre-commit>=4.6.2",
 ]
 
 [project.scripts]

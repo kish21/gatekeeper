@@ -4,6 +4,10 @@
 > not survive the replica. It also lifts ADR-007's single-writer constraint, which is what pinned
 > the hosted gateway to one replica.
 
+> The decision and the two options rejected are recorded as **ADR-011** in
+> [PRODUCT.md](../internal/PRODUCT.md) — it supersedes ADR-007's single-writer constraint for hosted
+> deployments.
+
 ## The problem this solves
 
 The ledger was a SQLite file. On one machine that is the right answer — it is fast, it needs no
