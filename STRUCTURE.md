@@ -9,6 +9,7 @@ gatekeeper/
 ├── pyproject.toml          # package metadata + deps; dev tools under [dependency-groups]
 ├── Makefile                # install / demo / init / doctor / serve / tail / verify / test / lint
 ├── Dockerfile              # cloud-neutral image; configured by environment, no baked overlay
+├── docker-compose.yml      # local: the gateway + a Postgres audit ledger + the desk, one command
 ├── .env.example            # the variable NAMES (secrets + overrides). `gatekeeper init` writes .env
 │
 ├── config/                 # ── what you edit (data, not code) ──

@@ -1,0 +1,66 @@
+# GateKeeper on your own machine, the way a team would actually run it:
+#
+#   docker compose up --build          then open http://127.0.0.1:8765/ui
+#
+# One gateway, one PostgreSQL database for the audit trail, and the desk. Unlike `make demo`
+# (which is hermetic and throwaway), this is the hosted shape in miniature: the ledger lives in the
+# database, so it survives `docker compose restart`, `verify` works from any process, and you can
+# scale the gateway to two replicas and watch the hash chain stay single.
+#
+# The desk asks for a token once. Two open it, and they are not the same thing:
+#   local-desk-token                 lets you LOOK at the desk
+#   dev-token-priya-REPLACE-ME       priya's own token: the approver, who can release a held write
+# A held write is refused for anyone else — including alice, who asked for it.
+#
+# The demo tokens are on by default here BECAUSE this binds to loopback only. Before this reaches
+# anything but your laptop, replace GATEKEEPER_IDENTITIES with your own tokens (or switch to OIDC),
+# drop GATEKEEPER_ALLOW_DEMO_TOKENS, and set a real GATEKEEPER_UI_TOKEN.
+
+name: gatekeeper
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: gatekeeper
+      POSTGRES_DB: gatekeeper
+    volumes:
+      - ledger:/var/lib/postgresql/data
+    healthcheck:
+      # The gateway fails closed if it cannot write the audit trail, so it must not start until
+      # the database can actually take a connection.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gatekeeper"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    # Not published: only the gateway needs it. Add `ports: ["5432:5432"]` to poke at it with psql.
+
+  gateway:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8765:8765"     # the governed MCP endpoint + /ui + /healthz + /metrics
+    environment:
+      # The audit trail lives in the database, not in this container. That is the whole point.
+      GATEKEEPER_LEDGER_URL: postgresql://postgres:gatekeeper@db:5432/gatekeeper
+      # Generate a real one for anything you care about: `openssl rand -hex 32`. Changing it later
+      # makes older records unverifiable unless you keep the old one in _PREVIOUS.
+      GATEKEEPER_HMAC_KEY: ${GATEKEEPER_HMAC_KEY:-local-development-key-not-for-real-use-0000}
+      # The desk, and who may release a held write. `priya` holds the approver role in
+      # config/identities.yaml and has no permit to call tools of her own.
+      GATEKEEPER_UI_TOKEN: ${GATEKEEPER_UI_TOKEN:-local-desk-token}
+      GATEKEEPER_DESK_URL: http://127.0.0.1:8765/ui
+      # Where held writes are announced. Unset = nobody is told and they die of timeout.
+      GATEKEEPER_APPROVAL_WEBHOOK: ${GATEKEEPER_APPROVAL_WEBHOOK:-}
+      # Loopback-only bind, so the committed demo tokens are allowed. See the header.
+      GATEKEEPER_ALLOW_DEMO_TOKENS: "1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8765/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  ledger:
