@@ -35,6 +35,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
   that `verify` resumes from, so trimming can never make a deletion undetectable; and
   `gatekeeper rotate-key`, after which every earlier record still verifies under the key that
   signed it (migration 0004). `verify --json` for a cron check.
+- **`docker compose up --build`** runs the whole thing locally the way a team would deploy it:
+  the gateway, a PostgreSQL audit ledger and the desk. Records survive a restart because they are
+  in the database, and `--scale gateway=2` puts two gateways on one hash chain.
 - The Azure deploy provisions Postgres (or uses `GK_PG_URL`), serves the desk behind its own
   token, wires the approver identity, and prints the durability proof: restart the app, re-run the
   probe with `--expect-at-least`. The probe gained T7 (a second process reads and verifies the

@@ -25,6 +25,12 @@ ui: ## Open the guard's desk (approvals, activity, trust, servers) at http://127
 	$(PY) -m gatekeeper.cli.app ui
 
 .PHONY: demo-company
+docker-up: ## Run it like a team would: gateway + a Postgres audit ledger + the desk, in Docker
+	docker compose up --build
+
+docker-down: ## Stop it. Add `-v` yourself to delete the ledger volume too.
+	docker compose down
+
 demo-company: ## The company demo: mail, Jira, database, SharePoint, GitHub through the guard (run `make ui` first)
 	$(PY) -m scripts.demo_company
 

@@ -133,6 +133,22 @@ The existing rulebook already applies: a read-only role calling `create_issue` i
 operator is allowed, and both are recorded. Governed servers receive only the environment they
 need to start plus what you declare for them, never the gateway's own secrets.
 
+## Run it in Docker, on your machine
+
+The hosted shape in miniature — the gateway, a PostgreSQL audit ledger, and the desk:
+
+```bash
+docker compose up --build          # then open http://127.0.0.1:8765/ui
+```
+
+The desk asks for a token once. `local-desk-token` lets you look; `dev-token-priya-REPLACE-ME` is
+priya's own — she holds the `approver` role, so she is the one who can release a held write.
+Anyone else is refused, including alice, who asked for it.
+
+Because the ledger is in the database rather than the container, `docker compose restart gateway`
+leaves every record where it was, and `docker compose up --scale gateway=2` runs two gateways on
+one hash chain.
+
 ## Run it for a whole team
 
 The same gateway runs as a container over HTTPS, with your corporate login (OIDC: Entra ID, Okta,

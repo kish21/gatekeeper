@@ -1,5 +1,9 @@
 # Getting started
 
+> **Just want it running?** `docker compose up --build` gives you the gateway, a PostgreSQL audit
+> ledger and the desk at <http://127.0.0.1:8765/ui> — the shape a team would deploy, on your
+> machine. The rest of this page is the local install, which is what an MCP host launches.
+
 This page takes you from a fresh checkout to a gateway that your MCP host launches, and explains
 the few files you will ever touch. Ten minutes.
 
