@@ -11,8 +11,8 @@ keywords = ["mcp", "model-context-protocol", "governance", "gateway", "rbac", "a
 # --- Runtime (prod) dependencies. Pins added in /foundation when first installed. ---
 dependencies = [
   "mcp>=1.27.2,<2",      # official MCP SDK; 2.x renamed the client API (streamable_http_client, httpx2) — migrate deliberately
-  "pydantic>=2.13.4",         # typed contracts / DTOs
-  "pydantic-settings>=2.14.1",# .env-driven settings (no hardcoding)
+  "pydantic>=2.13.5",         # typed contracts / DTOs
+  "pydantic-settings>=2.15.0",# .env-driven settings (no hardcoding)
   "python-dotenv>=1.2.2",    # read .env values for upstream credential refs ({from_env: NAME})
   "pyyaml>=6.0.3",           # YAML config loader
   "typer>=0.26.7",         # operator CLI
