@@ -22,6 +22,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -118,6 +119,30 @@ def test_records_survive_the_process_that_wrote_them(pg_url: str) -> None:
         reader.close()
 
 
+def _start(workers: list[Any]) -> None:
+    for worker in workers:
+        worker.start()
+
+
+def _reap(workers: list[Any], *, timeout: float) -> list[int | None]:
+    """Wait for every process, and NEVER leave one behind.
+
+    A child that outlives its join is not just a failed test: multiprocessing joins non-daemon
+    children at interpreter exit, so the whole pytest process would then hang *after* the tests
+    finished — past the point pytest-timeout is still watching, which is how a wedged CI job looks
+    like a job that simply never ends. Killing stragglers here keeps a failure a failure.
+    """
+    try:
+        for worker in workers:
+            worker.join(timeout=timeout)
+        return [w.exitcode for w in workers]
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=10)
+
+
 def _append_batch(url: str, who: str, count: int) -> None:
     """Run in a separate PROCESS: a replica of the gateway appending to the shared ledger."""
     store = SqlLedgerStore(Session(create_ledger_engine(url)), KEY)
@@ -139,12 +164,8 @@ def test_concurrent_replicas_produce_one_intact_chain(pg_url: str) -> None:
         ctx.Process(target=_append_batch, args=(pg_url, f"replica{n}", PER_WRITER))
         for n in range(WRITERS)
     ]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join(timeout=120)
-
-    assert [w.exitcode for w in workers] == [0] * WRITERS
+    _start(workers)
+    assert _reap(workers, timeout=120) == [0] * WRITERS
 
     store = _store(pg_url)
     try:
@@ -190,12 +211,15 @@ def test_two_approvers_racing_one_request(pg_url: str) -> None:
         ctx.Process(target=_decide, args=(pg_url, request_id, who, results))
         for who in ("priya", "sam")
     ]
-    for racer in racers:
-        racer.start()
-    for racer in racers:
-        racer.join(timeout=60)
+    # Read the results BEFORE joining: a child blocked writing to a full queue pipe cannot exit,
+    # and a parent joining it first would deadlock. Tiny payloads make that unlikely here, and
+    # "unlikely" is not a property to build a test suite on.
+    _start(racers)
+    try:
+        outcomes = sorted(results.get(timeout=60)[0] for _ in racers)
+    finally:
+        _reap(racers, timeout=30)
 
-    outcomes = sorted(results.get(timeout=10)[0] for _ in racers)
     assert outcomes == ["refused", "won"]
     assert queue.get(request_id).status is ApprovalStatus.APPROVED  # type: ignore[union-attr]
     queue.close()
