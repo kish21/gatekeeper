@@ -14,6 +14,9 @@ Start with whichever of these matches you:
   [deploy/azure-container-apps.md](deploy/azure-container-apps.md) is the terse reference — every
   setting, every knob, and how the audit trail became durable. [SHOWCASE-AZURE.md](SHOWCASE-AZURE.md)
   is the hosted story plus a demo script for a customer call.
+- **Deciding whether to buy it?** [WHAT-YOU-CAN-CONNECT.md](WHAT-YOU-CAN-CONNECT.md): the product
+  in four sentences, the five systems that work today, what else you can put behind the guard, and
+  the three things only you can decide. No code, no settings files.
 - **A word you do not know?** [glossary.md](glossary.md).
 
 Reference:
