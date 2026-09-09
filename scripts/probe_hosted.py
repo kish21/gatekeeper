@@ -5,7 +5,7 @@
 Where ``scripts.demo_enterprise`` runs the enterprise story against a LOCAL uvicorn it starts
 itself, this drives the SAME governed pipeline over the public internet against a real deployment.
 Nothing is faked: real DNS, real TLS at the platform ingress, real HTTP transport, real Cedar
-policy, real hash-chained ledger on the mounted volume.
+policy, real hash-chained ledger in the deployment's own database.
 
 It asserts the five claims a hosted gateway must survive, and exits non-zero if any fails:
 

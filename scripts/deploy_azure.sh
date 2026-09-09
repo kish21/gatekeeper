@@ -134,6 +134,26 @@ az provider register -n Microsoft.App --only-show-errors -o none 2>/dev/null || 
 az provider register -n Microsoft.OperationalInsights --only-show-errors -o none 2>/dev/null || true
 [ "$LEDGER_STORAGE" = postgres ] &&
   az provider register -n Microsoft.DBforPostgreSQL --only-show-errors -o none 2>/dev/null || true
+
+# Registration is ASYNCHRONOUS. On a subscription that has never used these services it takes a
+# minute or two, and creating a resource seconds after asking would fail with "not registered" --
+# the most likely way a first run dies. So wait for the ones we are about to use.
+await_provider() {
+  namespace="$1"
+  state=""
+  for _ in $(seq 1 40); do
+    state="$(az provider show -n "$namespace" --query registrationState -o tsv 2>/dev/null || echo '')"
+    [ "$state" = "Registered" ] && return 0
+    printf '.'
+    sleep 5
+  done
+  warn "$namespace is still '${state:-unknown}' after ~3 minutes. Continuing; if creation fails, wait a moment and re-run - a re-run is safe."
+}
+printf '    waiting for the subscription to register the services '
+await_provider Microsoft.App
+if [ "$LEDGER_STORAGE" = postgres ]; then await_provider Microsoft.DBforPostgreSQL; fi
+printf ' ready\n'
+
 az containerapp env create -n "$ENVNAME" -g "$RG" -l "$LOCATION" --only-show-errors -o none
 
 LEDGER_URL=""
