@@ -207,6 +207,8 @@ credential, the approver must actually hold the approver role, and nobody may ap
 request. What lands in the record is not a name someone claimed, but a name that was proven — and
 *how* it was proven.
 
+---
+
 ## Step 4 — Read the record
 
 ```bash
