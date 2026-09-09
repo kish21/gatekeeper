@@ -101,7 +101,8 @@ When it finishes it prints **DEPLOYED** and your address, something like
 commands for every step below, filled in with your names — you can copy them from your terminal
 rather than editing the ones here.
 
-*If it stops with an error*, it tells you which of the six things it was doing. The most common
+*If it stops with an error*, it tells you which stage it was on — it counts them off as `1/4`
+through `4/4` as it goes, so the last line you saw is the one that failed. The most common
 cause is a subscription that has never used a service before; the script registers what it can and
 names what it cannot. Re-running is always safe: the names are fixed, so a second run continues
 where the first stopped rather than making a duplicate of everything.
@@ -178,9 +179,19 @@ https://<your address>/ui
 
 It asks for a credential once. There are two kinds, and the difference *is* the demonstration.
 
-**Paste the desk token first** (`echo "$UIT"`). Now have the assistant attempt something a company
-would care about — a write. It does not happen. It appears on the desk and *waits*, and the
-assistant sits there, blocked.
+**Paste the desk token first** (`echo "$UIT"`). Leave that page open.
+
+Now you need an assistant to attempt something. Point yours at your new gateway — in whatever tool
+you use, add a remote MCP server with the address `https://<your address>/mcp` and the header
+`Authorization: Bearer <the operator token>`:
+
+```bash
+echo "$IDS" | cut -d';' -f1 | cut -d: -f3     # the operator's token
+```
+
+From now on that assistant reaches your systems only through the gateway. Ask it to do something a
+company would care about — write a file, change a record. It does not happen. It appears on the desk
+you left open and *waits*, and the assistant sits there, blocked, until somebody decides.
 
 Press **Approve**. You are refused.
 
