@@ -46,7 +46,7 @@ dev = [
   "pytest-cov>=7.1.0",
   "pytest-timeout>=2.4.0",   # a hung async test must FAIL with stacks, never wedge CI
 
-  "ruff>=0.16.5",
+  "ruff>=0.16.7",
   "mypy>=2.3.1",
   "types-PyYAML",
   "pip-audit>=2.10.1",
