@@ -36,7 +36,7 @@ demo = ["mcp-server-time>=2026.6.4"]
 # Hosted, durable ledger — a Postgres database instead of the local SQLite file, so the audit trail
 # survives a restart and more than one replica can serve. Install with `pip install ".[postgres]"`;
 # the container image ships with it.
-postgres = ["psycopg[binary]>=3.2.12"]
+postgres = ["psycopg[binary]>=3.3.5"]
 
 [dependency-groups]
 # Dev/test tooling — NOT shipped to prod.
@@ -50,7 +50,7 @@ dev = [
   "mypy>=2.3.1",
   "types-PyYAML",
   "pip-audit>=2.10.1",
-  "psycopg[binary]>=3.2.12",   # the durable-ledger integration tests run against a real Postgres
+  "psycopg[binary]>=3.3.5",   # the durable-ledger integration tests run against a real Postgres
   "pre-commit>=4.6.2",
 ]
 
