@@ -41,17 +41,17 @@ postgres = ["psycopg[binary]>=3.2.12"]
 [dependency-groups]
 # Dev/test tooling — NOT shipped to prod.
 dev = [
-  "pytest>=9.1.1",
-  "pytest-asyncio>=1.4.0",
+  "pytest>=9.2.0",
+  "pytest-asyncio>=1.4.1",
   "pytest-cov>=7.1.0",
   "pytest-timeout>=2.4.0",   # a hung async test must FAIL with stacks, never wedge CI
 
-  "ruff>=0.16.5",
-  "mypy>=2.3.1",
+  "ruff>=0.17.3",
+  "mypy>=2.4.1",
   "types-PyYAML",
   "pip-audit>=2.10.1",
   "psycopg[binary]>=3.2.12",   # the durable-ledger integration tests run against a real Postgres
-  "pre-commit>=4.6.2",
+  "pre-commit>=4.7.0",
 ]
 
 [project.scripts]
